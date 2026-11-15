@@ -61,8 +61,9 @@ import {
 } from "../src/renderer/lib/cell-format"
 import { applyUserChanges, runUserQuery } from "../src/main/user-queries"
 import { openSamplePostgres } from "./sample-postgres"
-import { caretAt, commentEdit, indentEdit, type TextEdit } from "../src/renderer/lib/sql-editing"
 import { sqlTokens } from "../src/renderer/lib/sql-tokens"
+import { completions, completionSpot, quoteName } from "../src/renderer/lib/sql-complete"
+import { errorOffset, errorRange, splitErrorOffset, withErrorOffset } from "../src/shared/sql-errors"
 
 const sample = await openSamplePostgres()
 const driver = new PostgresDriver(
@@ -1573,36 +1574,114 @@ SELECT o.id, count(*)::bigint AS "from", 'it''s' || $$x$$, 1.5e3
   assert.equal(sqlTokens("SELECT 'abc").at(-1)?.kind, "string")
 })
 
-await check("sql editing: indent, outdent and comment, the selection kept on the same text", () => {
-  const apply = (text: string, edit: TextEdit | null) =>
-    edit ? text.slice(0, edit.from) + edit.insert + text.slice(edit.to) : text
-  const sql = "SELECT a\n  FROM t\nWHERE x = 1"
-  // A caret: two spaces where it is.
-  const tab = indentEdit(sql, 3, 3, false)!
-  assert.equal(apply(sql, tab), "SEL  ECT a\n  FROM t\nWHERE x = 1")
-  assert.deepEqual([tab.selectStart, tab.selectEnd], [5, 5])
-  // A selection over two lines: both indented, the same letters selected.
-  const both = indentEdit(sql, 7, 13, false)!
-  const indented = apply(sql, both)
-  assert.equal(indented, "  SELECT a\n    FROM t\nWHERE x = 1")
-  // Each end moved with its own line's letters.
-  assert.deepEqual([both.selectStart, both.selectEnd], [9, 17])
-  assert.equal(indented.slice(both.selectStart, both.selectEnd), "a\n    FR")
-  // A selection ending at a line's start leaves that line alone.
-  assert.equal(apply(sql, indentEdit(sql, 0, 9, false)), "  SELECT a\n  FROM t\nWHERE x = 1")
-  // Outdent takes what is there, up to two spaces.
-  assert.equal(apply(sql, indentEdit(sql, 0, sql.length, true)), "SELECT a\nFROM t\nWHERE x = 1")
-  assert.equal(indentEdit("SELECT 1", 0, 0, true), null)
-  // Comment: at the lines' common margin; again, back as they were.
-  const commented = apply(sql, commentEdit(sql, 9, 12))
-  assert.equal(commented, "SELECT a\n  -- FROM t\nWHERE x = 1")
-  assert.equal(apply(commented, commentEdit(commented, 12, 12)), sql)
-  const all = apply(sql, commentEdit(sql, 0, sql.length))
-  assert.equal(all, "-- SELECT a\n--   FROM t\n-- WHERE x = 1")
-  assert.equal(apply(all, commentEdit(all, 0, all.length)), sql)
-  assert.deepEqual(caretAt(sql, 0), { line: 1, column: 1 })
-  assert.deepEqual(caretAt(sql, 13), { line: 2, column: 5 })
-  assert.deepEqual(caretAt(sql, sql.length), { line: 3, column: 12 })
+await check("sql errors: where a database error points, carried across IPC in the message", async () => {
+  // Postgres says where, from 1.
+  const sql = "SELECT id,\n       nope\n  FROM orders"
+  const failure = await lockedDriver.query(sql, { readOnly: true, maxRows: 10 }).then(() => null, (error: unknown) => error)
+  const offset = errorOffset(failure, sql, "postgres")
+  assert.equal(offset, sql.indexOf("nope"))
+  assert.deepEqual(errorRange(sql, offset!), { from: sql.indexOf("nope"), to: sql.indexOf("nope") + 4 })
+  // At the end of the input: the last word.
+  const cut = "SELECT * FROM orders WHERE  "
+  const syntax = await lockedDriver.query(cut, { readOnly: true, maxRows: 10 }).then(() => null, (error: unknown) => error)
+  assert.deepEqual(errorRange(cut, errorOffset(syntax, cut, "postgres")!), { from: 21, to: 26 })
+
+  // The offset rides at the end of the message, and comes off again.
+  const marked = withErrorOffset(failure, 17) as Error
+  assert.notEqual(marked.message, (failure as Error).message)
+  assert.deepEqual(splitErrorOffset(`Error invoking remote method 'db:query': ${marked.message}`), {
+    message: `Error invoking remote method 'db:query': ${(failure as Error).message}`,
+    offset: 17,
+  })
+  assert.deepEqual(splitErrorOffset("plain"), { message: "plain", offset: null })
+  assert.equal(withErrorOffset(failure, null), failure)
+
+  // MySQL quotes what follows the spot, on a line; or names what is missing.
+  const my = "SELECT *\n  FROM orders\n WHERE status = 'paid' AND AND id = 1"
+  const near = new Error("You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'AND id = 1' at line 3")
+  assert.equal(errorOffset(near, my, "mysql"), my.indexOf("AND id"))
+  const end = new Error("You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '' at line 1")
+  assert.deepEqual(errorRange("SELECT * FROM  ", errorOffset(end, "SELECT * FROM  ", "mysql")!), { from: 9, to: 13 })
+  assert.equal(errorOffset(new Error("Unknown column 'o.totl' in 'field list'"), "SELECT o.totl FROM orders o", "mysql"), 7)
+  assert.equal(errorOffset(new Error("Table 'shop.ordrs' doesn't exist"), "SELECT * FROM `ordrs`", "mysql"), 14)
+  assert.equal(errorOffset(new Error("Connection lost"), my, "mysql"), null)
+
+  // Ranges: a quoted name whole, a lone sign, the last word past the end.
+  assert.deepEqual(errorRange('SELECT "Bad Name" x', 7), { from: 7, to: 17 })
+  assert.deepEqual(errorRange("SELECT 1 +", 9), { from: 9, to: 10 })
+  assert.equal(errorRange("   ", 1), null)
+})
+
+await check("sql editor: suggests tables, and the columns of the tables a statement names", () => {
+  const schemas = [
+    { name: "public", tables: [{ name: "users", kind: "table" as const }, { name: "orders", kind: "table" as const }, { name: "Order Items", kind: "view" as const }] },
+    { name: "billing", tables: [{ name: "invoices", kind: "table" as const }] },
+  ]
+  const known: Record<string, string[]> = { "public.users": ["id", "email", "created_at"], "public.orders": ["id", "user_id", "total"] }
+  const asked: string[] = []
+  const suggest = (text: string, caret = text.indexOf("|")) => {
+    const sql = text.replace("|", "")
+    const spot = completionSpot(sql, caret, "postgres")
+    if (!spot) return null
+    const { items, pending } = completions(spot, {
+      schemas,
+      defaultSchema: "public",
+      engine: "postgres",
+      columnsOf: (ref) => {
+        const names = known[`${ref.schema}.${ref.table}`]
+        if (!names) asked.push(`${ref.schema}.${ref.table}`)
+        return names?.map((name) => ({ name, type: "text", kind: "text" as const }))
+      },
+    })
+    return { spot, items, pending, labels: items.map((item) => item.label) }
+  }
+
+  // After FROM: tables only, other schemas qualified, odd names quoted.
+  const from = suggest("SELECT * FROM |")!
+  assert.equal(from.spot.wantsTable, true)
+  assert.deepEqual(from.labels, ["users", "orders", "Order Items", "invoices"])
+  assert.equal(from.items.find((item) => item.label === "invoices")!.insert, "billing.invoices")
+  assert.equal(from.items.find((item) => item.label === "Order Items")!.insert, '"Order Items"')
+  assert.equal(suggest("SELECT * FROM users, o|")!.spot.wantsTable, true)
+  assert.deepEqual(suggest("SELECT * FROM o|")!.labels, ["orders", "Order Items"])
+
+  // A prefix matches anywhere, starts first; the whole word is replaced.
+  const middle = suggest("SELECT * FROM ord|ers")!
+  assert.deepEqual([middle.spot.from, middle.spot.to, middle.spot.prefix], [14, 20, "ord"])
+  assert.deepEqual(suggest("SELECT * FROM ice|")!.labels, ["invoices"])
+
+  // In the select list: the columns of every table named, then the tables.
+  const list = suggest("SELECT | FROM users u JOIN orders o ON o.user_id = u.id")!
+  assert.equal(list.spot.wantsTable, false)
+  assert.deepEqual(list.spot.uses, [{ parts: ["users"], alias: "u" }, { parts: ["orders"], alias: "o" }])
+  assert.deepEqual(list.labels.slice(0, 6), ["id", "email", "created_at", "id", "user_id", "total"])
+  assert.equal(list.items[0]!.source, "u")
+
+  // After an alias, a table or a schema and a dot.
+  assert.deepEqual(suggest("SELECT o.| FROM orders AS o")!.labels, ["id", "user_id", "total"])
+  assert.deepEqual(suggest("SELECT users.e| FROM public.users")!.labels, ["email"])
+  assert.deepEqual(suggest("SELECT * FROM billing.|")!.labels, ["invoices"])
+  assert.equal(suggest("SELECT * FROM billing.|")!.items[0]!.insert, "invoices")
+
+  // Columns not fetched yet are asked for.
+  asked.length = 0
+  const invoices = suggest("SELECT i.| FROM billing.invoices i")!
+  assert.deepEqual(invoices.pending, [{ schema: "billing", table: "invoices" }])
+  assert.deepEqual(asked, ["billing.invoices"])
+
+  // Only the caret's statement counts.
+  assert.deepEqual(suggest("SELECT * FROM orders o; SELECT o.| FROM users o")!.labels, ["id", "email", "created_at"])
+
+  // Not in strings, comments or numbers, and not for what is already typed.
+  assert.equal(suggest("SELECT 'us|'"), null)
+  assert.equal(suggest("SELECT 1 -- fro|"), null)
+  assert.equal(suggest("SELECT 1e1|"), null)
+  assert.deepEqual(suggest("SELECT * FROM users|")!.labels, [])
+
+  // MySQL quotes with backticks and keeps case.
+  assert.equal(quoteName("UserName", "mysql"), "UserName")
+  assert.equal(quoteName("UserName", "postgres"), '"UserName"')
+  assert.equal(quoteName("order", "mysql"), "`order`")
 })
 
 await check("ai settings: kept, made sound, and told to the chat and the SQL helper", () => {

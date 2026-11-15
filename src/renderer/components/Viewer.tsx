@@ -2,6 +2,7 @@ import {
   BookOpen,
   Check,
   ChevronDown,
+  Copy,
   Database,
   Eye,
   LayoutDashboard,
@@ -12,9 +13,24 @@ import {
   Table2,
   X,
 } from "lucide-react"
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type HTMLAttributes,
+  type ReactNode,
+} from "react"
 
 import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -117,6 +133,31 @@ function TabMenuItem({ tab, active }: { tab: Tab; active: boolean }) {
  */
 function TabStrip({ tabs, activeTabId }: { tabs: Tab[]; activeTabId: string | null }) {
   const strip = useRef<HTMLDivElement>(null)
+  const reorderTabs = useStore((state) => state.reorderTabs)
+  /** Also what tells a reorder apart from something dragged in from outside. */
+  const [dragId, setDragId] = useState<string | null>(null)
+  /** The gap the tab would land in: 0 before the first, `tabs.length` after the last. */
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
+
+  function endDrag() {
+    setDragId(null)
+    setDropIndex(null)
+  }
+
+  function commitDrop() {
+    const ids = tabs.map((tab) => tab.id)
+    const from = dragId === null ? -1 : ids.indexOf(dragId)
+    if (from !== -1 && dropIndex !== null) {
+      // Taking the tab out first shifts every later gap left by one.
+      const to = dropIndex > from ? dropIndex - 1 : dropIndex
+      if (to !== from) {
+        const [moved] = ids.splice(from, 1)
+        ids.splice(to, 0, moved!)
+        reorderTabs(ids)
+      }
+    }
+    endDrag()
+  }
   const [edges, setEdges] = useState({ before: false, after: false })
 
   const measure = useCallback(() => {
@@ -167,11 +208,50 @@ function TabStrip({ tabs, activeTabId }: { tabs: Tab[]; activeTabId: string | nu
         ref={strip}
         role="tablist"
         onScroll={measure}
+        onDragLeave={(event) => {
+          if (dragId === null) return
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+          setDropIndex(null)
+        }}
         style={mask ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
         className="flex min-w-0 items-end gap-0.5 overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden"
       >
-        {tabs.map((tab) => (
-          <TabButton key={tab.id} tab={tab} />
+        {tabs.map((tab, index) => (
+          <TabButton
+            key={tab.id}
+            tab={tab}
+            dragging={dragId === tab.id}
+            dropSide={
+              dropIndex === index
+                ? "left"
+                : dropIndex === tabs.length && index === tabs.length - 1
+                  ? "right"
+                  : null
+            }
+            drag={{
+              draggable: true,
+              onDragStart: (event) => {
+                setDragId(tab.id)
+                event.dataTransfer.effectAllowed = "move"
+                // Chromium starts no drag with nothing on the transfer.
+                event.dataTransfer.setData("text/plain", tab.id)
+              },
+              onDragOver: (event) => {
+                if (dragId === null) return
+                event.preventDefault()
+                event.dataTransfer.dropEffect = "move"
+                const rect = event.currentTarget.getBoundingClientRect()
+                const pastMiddle = event.clientX > rect.left + rect.width / 2
+                setDropIndex(pastMiddle ? index + 1 : index)
+              },
+              onDrop: (event) => {
+                if (dragId === null) return
+                event.preventDefault()
+                commitDrop()
+              },
+              onDragEnd: endDrag,
+            }}
+          />
         ))}
       </div>
       {(edges.before || edges.after) && (
@@ -206,10 +286,29 @@ function TabStrip({ tabs, activeTabId }: { tabs: Tab[]; activeTabId: string | nu
   )
 }
 
-function TabButton({ tab }: { tab: Tab }) {
+type TabDragHandlers = Pick<
+  HTMLAttributes<HTMLDivElement>,
+  "draggable" | "onDragStart" | "onDragOver" | "onDrop" | "onDragEnd"
+>
+
+function TabButton({
+  tab,
+  dragging,
+  dropSide,
+  drag,
+}: {
+  tab: Tab
+  dragging: boolean
+  /** Where a dragged tab would land, drawn as a line on that edge. */
+  dropSide: "left" | "right" | null
+  drag: TabDragHandlers
+}) {
   const activeTabId = useStore((state) => state.activeTabId)
   const activateTab = useStore((state) => state.activateTab)
   const closeTab = useStore((state) => state.closeTab)
+  const closeOtherTabs = useStore((state) => state.closeOtherTabs)
+  const closeAllTabs = useStore((state) => state.closeAllTabs)
+  const tabCount = useStore((state) => state.tabs.length)
   const { label, title } = useTabLabel(tab)
   const active = tab.id === activeTabId
   // A colour picked for the connection — red for production — marks its
@@ -218,47 +317,84 @@ function TabButton({ tab }: { tab: Tab }) {
     (state) => state.connections.find((item) => item.id === tab.connectionId)?.color ?? null
   )
   return (
-    <div
-      role="tab"
-      aria-selected={active}
-      tabIndex={0}
-      title={title}
-      onClick={() => activateTab(tab.id)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") activateTab(tab.id)
-      }}
-      style={
-        active && marked
-          ? { boxShadow: `inset 0 2px 0 ${toneColor(marked)}` }
-          : undefined
-      }
-      onAuxClick={(event) => {
-        if (event.button === 1) closeTab(tab.id)
-      }}
-      className={cn(
-        "group relative flex h-8 max-w-56 shrink-0 items-center gap-1.5 rounded-t-lg pr-1.5 pl-3 text-xs outline-offset-[-2px] transition-colors",
-        active
-          ? "border border-b-0 bg-background font-medium text-foreground"
-          : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground"
-      )}
-    >
-      <span className="shrink-0">
-        <TabIcon tab={tab} />
-      </span>
-      <span className="truncate">{label}</span>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-label={`Close ${label}`}
-        onClick={(event) => {
-          event.stopPropagation()
-          closeTab(tab.id)
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={<div />}
+        {...drag}
+        role="tab"
+        aria-selected={active}
+        tabIndex={0}
+        title={title}
+        onClick={() => activateTab(tab.id)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") activateTab(tab.id)
         }}
-        className={cn("size-5", !active && "opacity-0 group-hover:opacity-100")}
+        style={
+          active && marked
+            ? { boxShadow: `inset 0 2px 0 ${toneColor(marked)}` }
+            : undefined
+        }
+        onAuxClick={(event) => {
+          if (event.button === 1) closeTab(tab.id)
+        }}
+        className={cn(
+          "group relative flex h-8 max-w-56 shrink-0 items-center gap-1.5 rounded-t-lg pr-1.5 pl-3 text-xs outline-offset-[-2px] transition-colors",
+          active
+            ? "border border-b-0 bg-background font-medium text-foreground"
+            : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
+          dragging && "opacity-60"
+        )}
       >
-        <X />
-      </Button>
-    </div>
+        {/* Inside the tab's edge rather than in the 2px gap: the strip scrolls,
+            so a line outside the first or last tab would be clipped away. */}
+        {dropSide && (
+          <span
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute inset-y-1 z-10 w-0.5 rounded-full bg-primary",
+              dropSide === "left" ? "left-0" : "right-0"
+            )}
+          />
+        )}
+        <span className="shrink-0">
+          <TabIcon tab={tab} />
+        </span>
+        <span className="truncate">{label}</span>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Close ${label}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            closeTab(tab.id)
+          }}
+          className={cn("size-5", !active && "opacity-0 group-hover:opacity-100")}
+        >
+          <X />
+        </Button>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        <ContextMenuItem onClick={() => closeTab(tab.id)}>
+          <X />
+          Close
+        </ContextMenuItem>
+        <ContextMenuItem disabled={tabCount < 2} onClick={() => closeOtherTabs(tab.id)}>
+          Close others
+        </ContextMenuItem>
+        <ContextMenuItem onClick={closeAllTabs}>Close all</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={() =>
+            void navigator.clipboard.writeText(
+              tab.kind === "table" ? `${tab.schema}.${tab.table}` : label
+            )
+          }
+        >
+          <Copy />
+          {tab.kind === "table" ? "Copy table name" : "Copy name"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

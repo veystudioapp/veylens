@@ -4,6 +4,7 @@ import { addressOf } from "../shared/address"
 import { IPC, type AuditStatus, type DesktopApi } from "../shared/api"
 import { toolInfo } from "../shared/agent"
 import { describePermissions } from "../shared/permissions"
+import { errorOffset, withErrorOffset } from "../shared/sql-errors"
 import { startsLikeRead } from "../shared/statements"
 import { agentModels } from "./agent-models"
 import type { Assist } from "./assist"
@@ -11,6 +12,7 @@ import { describeChanges, refusal, type AuditLog } from "./audit"
 import type { Chats } from "./chats"
 import type { Connections } from "./connections"
 import type { Library } from "./library"
+import { bare, explained } from "./db/types"
 import { applyUserChanges, runUserQuery } from "./user-queries"
 
 /** Rows one page of a table may hold, whatever the page asks for. */
@@ -55,6 +57,45 @@ export function registerIpc({
     connectionId,
     connectionName: connectionId ? nameOf(connectionId) : null,
   })
+
+  const runQuery: DesktopApi["runQuery"] = async (connectionId, sql, readOnly, params) => {
+    // Dashboards, filters and metric tests ask for a read: they run all
+    // the time and change nothing. A statement from the SQL tab is kept.
+    if (readOnly) return runUserQuery(connections, connectionId, sql, readOnly, params)
+    const started = performance.now()
+    const read = startsLikeRead(sql)
+    const base = {
+      ...mine(connectionId),
+      action: read ? ("query" as const) : ("write" as const),
+      summary: read ? "Ran a query in a SQL tab" : "Ran a statement in a SQL tab",
+      sql,
+    }
+    try {
+      const result = await runUserQuery(connections, connectionId, sql, readOnly, params)
+      audit.record({
+        ...base,
+        status: "ok",
+        rows: result.affected ?? result.rows.length,
+        ms: Math.round(performance.now() - started),
+      })
+      return result
+    } catch (error) {
+      audit.record({ ...base, status: statusOf(error), detail: messageOf(error) })
+      throw error
+    }
+  }
+
+  /** The error again, carrying where it points in what the renderer sent:
+   * found in `sent`, then mapped back onto that. */
+  const located = (
+    connectionId: string,
+    error: unknown,
+    sent: string,
+    map: (offset: number) => number | null = (offset) => offset
+  ) => {
+    const at = errorOffset(error, sent, connections.get(connectionId).engine)
+    return withErrorOffset(error, at === null ? null : map(at))
+  }
 
   const handlers: Handlers = {
     listConnections: async () => connections.list(),
@@ -139,33 +180,26 @@ export function registerIpc({
       }
     },
     runQuery: async (connectionId, sql, readOnly, params) => {
-      // Dashboards, filters and metric tests ask for a read: they run all
-      // the time and change nothing. A statement from the SQL tab is kept.
-      if (readOnly) return runUserQuery(connections, connectionId, sql, readOnly, params)
-      const started = performance.now()
-      const read = startsLikeRead(sql)
-      const base = {
-        ...mine(connectionId),
-        action: read ? ("query" as const) : ("write" as const),
-        summary: read ? "Ran a query in a SQL tab" : "Ran a statement in a SQL tab",
-        sql,
-      }
       try {
-        const result = await runUserQuery(connections, connectionId, sql, readOnly, params)
-        audit.record({
-          ...base,
-          status: "ok",
-          rows: result.affected ?? result.rows.length,
-          ms: Math.round(performance.now() - started),
-        })
-        return result
+        return await runQuery(connectionId, sql, readOnly, params)
       } catch (error) {
-        audit.record({ ...base, status: statusOf(error), detail: messageOf(error) })
-        throw error
+        // With parameters bound, what ran is not what was written.
+        throw params ? error : located(connectionId, error, sql)
       }
     },
-    explainQuery: (connectionId, sql) =>
-      connections.driver(connectionId).explain(sql),
+    explainQuery: async (connectionId, sql) => {
+      try {
+        return await connections.driver(connectionId).explain(sql)
+      } catch (error) {
+        if (!bare(sql)) throw error
+        const sent = explained(sql)
+        const prefix = sent.length - bare(sql).length
+        const start = sql.length - sql.trimStart().length
+        throw located(connectionId, error, sent, (offset) =>
+          offset < prefix ? null : offset - prefix + start
+        )
+      }
+    },
 
     getKnowledge: async (connectionId) => library.knowledge(connectionId),
     saveKnowledge: async (connectionId, knowledge) => {

@@ -23,6 +23,7 @@ import {
   type ViewerTarget,
 } from "@shared/api"
 import { findMentions } from "@shared/mentions"
+import { splitErrorOffset } from "@shared/sql-errors"
 
 import { currentMentionTargets } from "./mentions"
 
@@ -120,6 +121,10 @@ type State = {
   openDashboard(connectionId: string, dashboardId: string): void
   openKnowledge(connectionId: string): void
   closeTab(tabId: string): void
+  closeOtherTabs(tabId: string): void
+  closeAllTabs(): void
+  /** Takes every open tab's id, in the new order. */
+  reorderTabs(ids: string[]): void
   activateTab(tabId: string): void
   setTabSql(tabId: string, sql: string): void
   viewerContext(): ViewerContext
@@ -143,11 +148,13 @@ type State = {
 const api = () => window.veydata
 
 const message = (error: unknown) =>
-  // Electron prefixes what a handler threw with the channel it came through.
-  (error instanceof Error ? error.message : String(error)).replace(
-    /^Error invoking remote method '[^']+': (Error: )?/,
-    ""
-  )
+  splitErrorOffset(
+    // Electron prefixes what a handler threw with the channel it came through.
+    (error instanceof Error ? error.message : String(error)).replace(
+      /^Error invoking remote method '[^']+': (Error: )?/,
+      ""
+    )
+  ).message
 
 export { message as errorMessage }
 
@@ -520,6 +527,25 @@ export const useStore = create<State>((set, get) => {
             ? (remaining[Math.min(index, remaining.length - 1)]?.id ?? null)
             : activeTabId,
       })
+    },
+
+    closeOtherTabs(id) {
+      const { tabs, tabSql } = get()
+      const tab = tabs.find((item) => item.id === id)
+      if (!tab) return
+      set({
+        tabs: [tab],
+        tabSql: id in tabSql ? { [id]: tabSql[id]! } : {},
+        activeTabId: id,
+        activeConnectionId: tab.connectionId,
+      })
+    },
+
+    closeAllTabs: () => set({ tabs: [], tabSql: {}, activeTabId: null }),
+
+    reorderTabs(ids) {
+      const byId = new Map(get().tabs.map((tab) => [tab.id, tab]))
+      set({ tabs: ids.flatMap((id) => byId.get(id) ?? []) })
     },
 
     activateTab(id) {

@@ -19,7 +19,6 @@ import {
   Fragment,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -34,6 +33,7 @@ import type {
 } from "@shared/api"
 import { chartProblem, inferChart } from "@shared/chart"
 import { defaultSchemaOf, judge } from "@shared/permissions"
+import { errorRange, splitErrorOffset } from "@shared/sql-errors"
 import { startsLikeRead } from "@shared/statements"
 
 import { Button } from "@/components/ui/button"
@@ -45,7 +45,6 @@ import {
 } from "@/components/ui/resizable"
 import { Spinner } from "@/components/ui/spinner"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { caretAt, commentEdit, indentEdit, type TextEdit } from "@/lib/sql-editing"
 import { errorMessage, useStore, type Tab } from "@/lib/store"
 import { connectionTone, IconTile, KIND_TONE } from "@/lib/tones"
 import { cn } from "@/lib/utils"
@@ -56,7 +55,8 @@ import { ChartControls, PinMenu } from "./chart-controls"
 import { DataGrid } from "./DataGrid"
 import { Markdown } from "./Markdown"
 import { EmptyState, ErrorNote, Loading } from "./state-view"
-import { SqlText, SqlTextarea } from "./sql-code"
+import { SqlText } from "./sql-code"
+import { SqlEditor, type SqlEditorCursor, type SqlEditorHandle } from "./sql-editor"
 
 type QueryTab = Extract<Tab, { kind: "query" }>
 
@@ -287,32 +287,36 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
   // A statement the agent put here is run read-only until somebody edits it:
   // from then on it is the user's own.
   const [readOnly, setReadOnly] = useState(tab.autoRun)
+  // Read by the editor's ⌘↵, which is bound once.
+  const readOnlyRef = useRef(readOnly)
+  readOnlyRef.current = readOnly
   const [view, setView] = useState<"grid" | "chart">(tab.chart ? "chart" : "grid")
   const [spec, setSpec] = useState<ChartSpec | null>(tab.chart ?? null)
   const [pinNote, setPinNote] = useState<string | null>(null)
-  const editor = useRef<HTMLTextAreaElement>(null)
-  const gutter = useRef<HTMLDivElement>(null)
+  const editor = useRef<SqlEditorHandle>(null)
   const request = useRef(0)
-  const [selection, setSelection] = useState({ start: 0, end: 0 })
+  const [cursor, setCursor] = useState<SqlEditorCursor>({ line: 1, column: 1, selected: 0 })
+  /** Where the last run's error points, until the SQL is edited. */
+  const [errorMark, setErrorMark] = useState<{ from: number; to: number; message: string } | null>(null)
+  const latestSql = useRef(sql)
+  latestSql.current = sql
+  const upperCaseKeywords = useStore((state) => state.ai.keywordCase !== "lower")
   // The editor's share of the tab, the same in every SQL tab and kept.
   const layout = useDefaultLayout({ id: "query-split", storage: localStorage })
 
   /** What a run or a dry run is about: the selection, when there is one. */
   const chosen = (text: string) => {
-    const area = editor.current
-    return area && area.selectionStart !== area.selectionEnd
-      ? text.slice(area.selectionStart, area.selectionEnd)
-      : text
+    const range = editor.current?.selection()
+    return range && range.from !== range.to ? text.slice(range.from, range.to) : text
   }
 
   const execute = useCallback(
     async (text: string, asReadOnly: boolean, plan = false) => {
-      const area = editor.current
-      const statement =
-        area && area.selectionStart !== area.selectionEnd
-          ? text.slice(area.selectionStart, area.selectionEnd)
-          : text
+      const range = editor.current?.selection()
+      const start = range && range.from !== range.to ? range.from : 0
+      const statement = range && range.from !== range.to ? text.slice(range.from, range.to) : text
       if (!statement.trim()) return
+      setErrorMark(null)
       const writes = !plan && !startsLikeRead(statement)
       if (writes && access === "read_only") {
         setRun({
@@ -376,7 +380,12 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
         }
       } catch (failure) {
         if (id === request.current) {
-          setRun({ state: "failed", error: errorMessage(failure), sql: statement })
+          const error = errorMessage(failure)
+          setRun({ state: "failed", error, sql: statement })
+          const { offset } = splitErrorOffset(failure instanceof Error ? failure.message : String(failure))
+          const range = offset === null ? null : errorRange(text, start + offset)
+          // Not on SQL that was changed while it ran.
+          if (range && latestSql.current === text) setErrorMark({ ...range, message: error })
         }
       }
     },
@@ -397,6 +406,7 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
   }, [active, tab.autoRun])
 
   const setEditor = (text: string) => {
+    setErrorMark(null)
     setSql(text)
     setTabSql(tab.id, text)
     setReadOnly(false)
@@ -430,28 +440,11 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
     }
   }
 
-  /** Tab, Shift-Tab and ⌘/ — made as one insertion, so ⌘Z undoes it whole. */
-  const applyEdit = (area: HTMLTextAreaElement, edit: TextEdit | null) => {
-    if (!edit) return
-    area.focus()
-    area.setSelectionRange(edit.from, edit.to)
-    const done = edit.insert
-      ? document.execCommand("insertText", false, edit.insert)
-      : document.execCommand("delete")
-    if (!done) {
-      area.setRangeText(edit.insert, edit.from, edit.to, "end")
-      area.dispatchEvent(new Event("input", { bubbles: true }))
-    }
-    area.setSelectionRange(edit.selectStart, edit.selectEnd)
-  }
-
   const result = run.state === "done" && !run.plan ? run.result : null
   const chartable = !!result && result.columns.length > 0 && spec !== null
   const busy = run.state === "running"
   const thinking = assisting.state === "running"
-  const selected = selection.end > selection.start
-  const lineCount = useMemo(() => sql.split("\n").length, [sql])
-  const caret = caretAt(sql, selection.end)
+  const selected = cursor.selected > 0
   const tone = connection ? connectionTone(connection) : "gray"
 
   return (
@@ -543,71 +536,26 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
         className="min-h-0 flex-1"
       >
         <ResizablePanel id="editor" defaultSize="40" minSize={72}>
-          <div className="relative flex h-full overflow-hidden">
-            {/* Line numbers, moved with the editor's scroll. */}
-            <div
-              aria-hidden
-              className="w-11 shrink-0 overflow-hidden border-r bg-muted/30 select-none"
-            >
-              <div
-                ref={gutter}
-                className="py-2.5 pr-2.5 text-right font-mono text-[11px] leading-5 text-muted-foreground/60 tabular-nums"
-              >
-                {Array.from({ length: lineCount }, (_, index) => (
-                  <div
-                    key={index}
-                    className={cn(index + 1 === caret.line && "text-foreground")}
-                  >
-                    {index + 1}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="relative min-w-0 flex-1 overflow-hidden">
-              <SqlTextarea
-                ref={editor}
-                value={sql}
-                wrap="off"
-                spellCheck={false}
-                placeholder={"SELECT *\n  FROM …\n LIMIT 100"}
-                aria-label="SQL"
-                onChange={(event) => setEditor(event.target.value)}
-                onSelect={(event) =>
-                  setSelection({
-                    start: event.currentTarget.selectionStart,
-                    end: event.currentTarget.selectionEnd,
-                  })
-                }
-                onScroll={(event) => {
-                  if (gutter.current) {
-                    gutter.current.style.transform = `translateY(${-event.currentTarget.scrollTop}px)`
-                  }
-                }}
-                onKeyDown={(event) => {
-                  const area = event.currentTarget
-                  const mod = event.metaKey || event.ctrlKey
-                  if (mod && event.key === "Enter") {
-                    event.preventDefault()
-                    if (event.shiftKey) void execute(sql, true, true)
-                    else void execute(sql, readOnly)
-                  } else if (event.key === "Tab" && !mod && !event.altKey) {
-                    event.preventDefault()
-                    applyEdit(
-                      area,
-                      indentEdit(area.value, area.selectionStart, area.selectionEnd, event.shiftKey)
-                    )
-                  } else if (mod && event.key === "/") {
-                    event.preventDefault()
-                    applyEdit(area, commentEdit(area.value, area.selectionStart, area.selectionEnd))
-                  }
-                }}
-                className="absolute inset-0 size-full resize-none bg-transparent px-3 py-2.5 font-mono text-[13px] leading-5 whitespace-pre outline-none placeholder:text-muted-foreground/50"
-              />
-            </div>
-            <span className="pointer-events-none absolute right-2 bottom-1.5 rounded bg-background/85 px-1.5 text-[11px] text-muted-foreground tabular-nums">
+          <div className="relative h-full overflow-hidden">
+            <SqlEditor
+              ref={editor}
+              value={sql}
+              onChange={setEditor}
+              onCursor={setCursor}
+              onRun={() => void execute(latestSql.current, readOnlyRef.current)}
+              onPlan={() => void execute(latestSql.current, true, true)}
+              connectionId={tab.connectionId}
+              engine={connection?.engine ?? "postgres"}
+              defaultSchema={connection ? defaultSchemaOf(connection) : "public"}
+              upperCaseKeywords={upperCaseKeywords}
+              error={errorMark}
+              placeholder={"SELECT *\n  FROM …\n LIMIT 100"}
+              label="SQL"
+            />
+            <span className="pointer-events-none absolute right-2 bottom-1.5 z-10 rounded bg-background/85 px-1.5 text-[11px] text-muted-foreground tabular-nums">
               {selected
-                ? `${(selection.end - selection.start).toLocaleString()} selected`
-                : `Ln ${caret.line}, Col ${caret.column}`}
+                ? `${cursor.selected.toLocaleString()} selected`
+                : `Ln ${cursor.line}, Col ${cursor.column}`}
             </span>
           </div>
         </ResizablePanel>
