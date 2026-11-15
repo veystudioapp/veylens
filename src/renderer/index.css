@@ -1,0 +1,672 @@
+@import "./styles/globals.css";
+
+/*
+ * globals.css (the same file as Vey's) expects the shell to name the fonts;
+ * the system stack, as there is no font-loading step in Electron.
+ */
+:root {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
+    monospace;
+
+  /* What a pending change looks like in the grid. */
+  --cell-edited: oklch(0.95 0.08 90);
+  --row-added: oklch(0.95 0.06 158);
+  --row-deleted: oklch(0.95 0.045 25);
+
+  /*
+   * Chart series, in this order and never cycled: the dataviz reference
+   * palette, validated against this app's own card surface in each mode
+   * (light #ffffff: every check passes, slots 3–5 under 3:1, so every chart
+   * keeps its legend, tooltips and table view; dark #212125: all pass).
+   */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+  --series-8: #e34948;
+  --chart-grid: #e1e0d9;
+  --chart-axis: #c3c2b7;
+  /* A KPI's change: status colours, always with an arrow and words. */
+  --delta-good: #006300;
+  --delta-bad: #d03b3b;
+}
+
+.dark {
+  --cell-edited: oklch(0.4 0.08 90);
+  --row-added: oklch(0.36 0.07 158);
+  --row-deleted: oklch(0.36 0.08 25);
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --chart-grid: #2c2c2a;
+  --chart-axis: #383835;
+  --delta-good: #0ca30c;
+  --delta-bad: #e66767;
+}
+
+/*
+ * Azure: the macOS system blue as the one accent, over greys with a trace of
+ * its hue. Graphite — no accent at all — left nothing for the eye to land on;
+ * globals.css's indigo is the colour every generated UI ships with. The
+ * window ground is a step darker than globals.css's sidebar, so the white
+ * panels that float on it read as sheets of paper rather than as regions.
+ *
+ * Here rather than in globals.css, which is Vey's file. Same ordering rule as
+ * there: the light block before `.dark[…]`, which must beat it.
+ */
+[data-palette="azure"] {
+  --brand-hue: 252;
+  --brand-tint: 0.45;
+  --primary: oklch(0.57 0.19 255);
+  --primary-foreground: oklch(0.99 0.005 255);
+  --ring: oklch(0.62 0.17 255);
+  --sidebar: oklch(0.955 0.004 252);
+  --sidebar-accent: oklch(0.915 0.008 252);
+  --sidebar-primary: oklch(0.57 0.19 255);
+  --sidebar-primary-foreground: oklch(0.99 0.005 255);
+  --sidebar-ring: oklch(0.62 0.17 255);
+  --chart-1: oklch(0.57 0.19 255);
+}
+
+.dark[data-palette="azure"] {
+  --primary: oklch(0.64 0.17 255);
+  --primary-foreground: oklch(0.99 0.005 255);
+  --ring: oklch(0.66 0.15 255);
+  --sidebar: oklch(0.19 0.004 252);
+  --sidebar-accent: oklch(0.28 0.006 252);
+  --sidebar-primary: oklch(0.64 0.17 255);
+  --sidebar-primary-foreground: oklch(0.99 0.005 255);
+  --sidebar-ring: oklch(0.66 0.15 255);
+  --chart-1: oklch(0.64 0.17 255);
+}
+
+/*
+ * Tones: one colour per kind of thing — a table, a dashboard, the business
+ * context — and the colours a connection can be given. All at one lightness
+ * and close in chroma, so no kind shouts over another; lighter in the dark.
+ * A tone is drawn as an icon in it, or an icon on a 14% wash of it
+ * (`IconTile`), never as text on its own.
+ */
+:root {
+  --tone-red: oklch(0.6 0.19 25);
+  --tone-orange: oklch(0.66 0.17 48);
+  --tone-amber: oklch(0.74 0.15 78);
+  --tone-green: oklch(0.6 0.14 150);
+  --tone-teal: oklch(0.62 0.11 195);
+  --tone-blue: oklch(0.6 0.17 252);
+  --tone-pink: oklch(0.62 0.18 350);
+  --tone-gray: oklch(0.6 0.02 252);
+}
+
+.dark {
+  --tone-red: oklch(0.7 0.17 25);
+  --tone-orange: oklch(0.74 0.15 50);
+  --tone-amber: oklch(0.8 0.14 80);
+  --tone-green: oklch(0.72 0.14 150);
+  --tone-teal: oklch(0.74 0.1 195);
+  --tone-blue: oklch(0.7 0.15 252);
+  --tone-pink: oklch(0.72 0.16 350);
+  --tone-gray: oklch(0.7 0.02 252);
+}
+
+/* A white sheet on the window ground: the viewer and the chat. In the
+ * components layer, so a utility on the same element — `border-t-0` under
+ * the open tab — wins over it, as utilities should. */
+@layer components {
+  .sheet {
+    background: var(--background);
+    border: 1px solid var(--border);
+    box-shadow: var(--elevation-xs);
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  user-select: none;
+  cursor: default;
+}
+
+/* Text that is somebody's data or somebody's answer can be selected; the
+   chrome around it cannot, as in any desktop app. */
+.selectable,
+input,
+textarea {
+  user-select: text;
+  cursor: auto;
+}
+
+/*
+ * The header stands in for the macOS title bar. As in Vey, only the empty
+ * space between its controls is the drag region — a button inside one works
+ * every other press.
+ */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+/* ── The grid ─────────────────────────────────────────────────────────── */
+
+/*
+ * The grid, after NocoDB: comfortable 32px rows (25px compact), 13px text,
+ * light rules both ways, a white header with each column's icon and menu, and
+ * a gutter that numbers the rows until a row is pointed at, when it offers
+ * the row's checkbox and the button that opens it as a form.
+ */
+.grid-table {
+  --grid-rule: color-mix(in oklch, var(--border) 75%, transparent);
+  --row-h: 32px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in oklch, var(--foreground) 88%, transparent);
+}
+.grid-table.is-compact {
+  --row-h: 25px;
+  font-size: 12px;
+}
+.grid-table th,
+.grid-table td {
+  border-right: 1px solid var(--grid-rule);
+  border-bottom: 1px solid var(--grid-rule);
+  height: var(--row-h);
+  padding: 0 10px;
+  white-space: nowrap;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grid-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 36px;
+  min-width: 120px;
+  padding-right: 4px;
+  background: var(--background);
+  border-bottom-color: var(--border);
+  color: var(--foreground);
+  font-weight: 500;
+  font-size: 12.5px;
+  text-align: left;
+}
+.grid-table.is-compact thead th {
+  height: 30px;
+  font-size: 12px;
+}
+.grid-table thead th:hover {
+  background: color-mix(in oklch, var(--muted) 50%, var(--background));
+}
+.grid-table .column-menu {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  opacity: 0.55;
+}
+.grid-table .column-menu svg {
+  width: 13px;
+  height: 13px;
+}
+.grid-table th:hover .column-menu,
+.grid-table .column-menu[aria-expanded="true"] {
+  opacity: 1;
+}
+.grid-table .column-menu:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.grid-table .gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 60px;
+  width: 60px;
+  padding: 0 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-align: right;
+}
+.grid-table thead .gutter {
+  z-index: 3;
+  min-width: 60px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.grid-table .row-actions {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+.grid-table tbody tr:hover .row-actions,
+.grid-table tbody tr.is-selected .row-actions {
+  display: flex;
+}
+.grid-table tbody tr:hover .row-num,
+.grid-table tbody tr.is-selected .row-num {
+  display: none;
+}
+.grid-table .row-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+}
+.grid-table .row-expand:hover {
+  background: var(--muted);
+  color: var(--primary);
+}
+.grid-table .row-expand svg {
+  width: 12px;
+  height: 12px;
+}
+
+.grid-table tbody tr:hover td {
+  background: color-mix(in oklch, var(--muted) 45%, var(--background));
+}
+.grid-table tr.is-selected td {
+  background: color-mix(in oklch, var(--primary) 8%, var(--background));
+}
+.grid-table td.cell-display {
+  color: var(--primary);
+  font-weight: 500;
+}
+.grid-table tr.is-added td:not(.gutter) {
+  background: var(--row-added);
+}
+.grid-table tr.is-deleted td:not(.gutter) {
+  background: var(--row-deleted);
+  text-decoration: line-through;
+  color: var(--muted-foreground);
+}
+.grid-table td.is-edited {
+  background: var(--cell-edited) !important;
+}
+/* A checkbox: a boolean's value, and a row's selection in the gutter. */
+.cell-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid color-mix(in oklch, var(--muted-foreground) 45%, transparent);
+  border-radius: 4px;
+  vertical-align: middle;
+  color: var(--primary-foreground);
+}
+.cell-check.is-on {
+  border-color: var(--check, var(--primary));
+  background: var(--check, var(--primary));
+}
+.cell-check-icon {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  vertical-align: middle;
+  color: color-mix(in oklch, var(--muted-foreground) 40%, transparent);
+}
+.cell-check-icon.is-on {
+  color: var(--check, var(--primary));
+  fill: color-mix(in oklch, var(--check, var(--primary)) 25%, transparent);
+}
+.cell-ring {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  -webkit-mask: radial-gradient(circle, transparent 3.5px, #000 4px);
+  mask: radial-gradient(circle, transparent 3.5px, #000 4px);
+}
+.cell-swatch {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--foreground) 15%, transparent);
+}
+.cell-check svg {
+  width: 11px;
+  height: 11px;
+}
+.cell-image {
+  display: inline-block;
+  height: calc(var(--row-h) - 8px);
+  width: calc(var(--row-h) - 8px);
+  border-radius: 5px;
+  object-fit: cover;
+  vertical-align: middle;
+  background: var(--muted);
+}
+
+.cell-rating {
+  display: inline-flex;
+  gap: 1px;
+  vertical-align: middle;
+}
+.cell-rating svg {
+  width: 13px;
+  height: 13px;
+  color: color-mix(in oklch, var(--muted-foreground) 35%, transparent);
+}
+.cell-rating svg.is-on {
+  color: var(--rating, var(--tone-amber));
+  fill: var(--rating, var(--tone-amber));
+}
+.cell-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 110px;
+  vertical-align: middle;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.cell-progress-track {
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--muted);
+}
+.cell-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+/* NULL is not a word in the data: a small mark, so it never reads as the
+   string "NULL". */
+.cell-null {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  line-height: 15px;
+}
+
+/* Formatted values (lib/cell-format.ts): a tag per value of a small set, a
+   chip for a foreign key, a link for an address. Each fits the 25px row. */
+.cell-tag {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  padding: 0 7px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.cell-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  vertical-align: middle;
+  padding: 0 6px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: color-mix(in oklch, var(--muted) 60%, var(--background));
+  font-size: 11.5px;
+  line-height: 17px;
+}
+.cell-link {
+  color: var(--primary);
+}
+td:hover > .cell-link[title] {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Values that are code rather than words keep the monospace. */
+.grid-table td.is-code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.grid-table td.is-editing {
+  padding: 0;
+  overflow: visible;
+}
+
+/* Widths held once measured: each column as its <col> says, whatever is
+ * typed into a cell of it. */
+.grid-table.is-fixed {
+  table-layout: fixed;
+}
+.grid-table.is-fixed th,
+.grid-table.is-fixed td {
+  min-width: 0;
+  max-width: none;
+}
+.grid-table.is-fixed td.is-editing {
+  overflow: hidden;
+}
+
+/* The edge of a header, to drag. Wider than it looks. */
+.grid-table .col-resize {
+  position: absolute;
+  top: 0;
+  /* Inside the header, which clips what overflows it. */
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.grid-table .col-resize::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  right: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 120ms;
+}
+.grid-table th:hover .col-resize::after {
+  background: var(--border);
+}
+.grid-table .col-resize:hover::after,
+.grid-table .col-resize.is-active::after {
+  top: 0;
+  bottom: 0;
+  background: var(--primary);
+}
+.grid-table.is-resizing,
+.grid-table.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+/* A key or a numbered column on a row that exists: read, not typed into. */
+.grid-table td.is-locked {
+  cursor: default;
+}
+
+/* ── Answers ──────────────────────────────────────────────────────────── */
+
+.prose {
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.prose > :first-child {
+  margin-top: 0;
+}
+.prose > :last-child {
+  margin-bottom: 0;
+}
+.prose p,
+.prose ul,
+.prose ol,
+.prose pre,
+.prose blockquote,
+.prose .table-wrap {
+  margin: 0.6em 0;
+}
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  margin: 1em 0 0.4em;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.prose ul,
+.prose ol {
+  padding-left: 1.3em;
+}
+.prose ul {
+  list-style: disc;
+}
+.prose ol {
+  list-style: decimal;
+}
+.prose li {
+  margin: 0.15em 0;
+}
+.prose a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--muted);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.prose pre {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+.prose pre code {
+  background: none;
+  padding: 0;
+}
+.prose blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  color: var(--muted-foreground);
+}
+.prose .table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.prose th,
+.prose td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.prose th {
+  background: var(--muted);
+  font-weight: 500;
+}
+.prose tr:last-child td {
+  border-bottom: none;
+}
+.prose hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+/* ── A dashboard's text tile ─────────────────────────────────────────────
+ * A heading over the cards below it and a line on what they are: written on
+ * the desk, not in a card. A first line on its own (a title, then a break)
+ * reads as the heading too. */
+
+.tile-text .prose {
+  color: var(--muted-foreground);
+}
+.tile-text .prose :is(h1, h2, h3, h4, strong) {
+  color: var(--foreground);
+}
+.tile-text .prose h1 {
+  margin: 0 0 0.3em;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+.tile-text .prose h2 {
+  margin: 0 0 0.3em;
+  font-size: 15px;
+}
+.tile-text .prose > p:first-child:has(br)::first-line {
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.9;
+}
+
+/* The end of a statement the assistant is still writing. */
+.writing-caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1.1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  opacity: 0.6;
+  animation: writing-caret 1s steps(1) infinite;
+}
+
+@keyframes writing-caret {
+  50% {
+    opacity: 0;
+  }
+}

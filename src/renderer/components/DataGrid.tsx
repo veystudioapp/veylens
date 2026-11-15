@@ -1,0 +1,1242 @@
+import {
+  ArrowDown,
+  ArrowDownWideNarrow,
+  ArrowUp,
+  ArrowUpNarrowWide,
+  Binary,
+  Braces,
+  Calendar,
+  CalendarClock,
+  Check,
+  ChevronDown,
+  Circle,
+  CircleCheck,
+  CircleDot,
+  Copy,
+  EyeOff,
+  DollarSign,
+  Flag,
+  Flame,
+  Gauge,
+  Hash,
+  Heart,
+  Info,
+  Image as ImageIcon,
+  KeyRound,
+  Link,
+  Link2,
+  Mail,
+  Maximize2,
+  MoveHorizontal,
+  Palette,
+  Percent,
+  Phone,
+  RotateCcw,
+  Settings2,
+  Square,
+  SquareCheck,
+  Star,
+  Tags,
+  ThumbsUp,
+  Timer,
+  ToggleLeft,
+  Type,
+  X,
+} from "lucide-react"
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+} from "react"
+
+import type {
+  Cell,
+  CheckIcon,
+  Column,
+  ColumnKind,
+  RatingIcon,
+  Sort,
+  TableFields,
+  Tone,
+} from "@shared/api"
+
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  detectFormat,
+  displayColumn,
+  cssColour,
+  formatCurrency,
+  formatDate,
+  formatDuration,
+  formatNumber,
+  formatOfDisplay,
+  formatPercent,
+  percentShare,
+  splitValues,
+  groupDigits,
+  tagTone,
+  useFormatValues,
+  useRowHeight,
+  type CellFormat,
+} from "@/lib/cell-format"
+import { toneColor, toneStyle } from "@/lib/tones"
+import { cn } from "@/lib/utils"
+
+import { RecordDialog } from "./RecordDialog"
+
+const KIND_ICON: Record<ColumnKind, typeof Hash> = {
+  number: Hash,
+  text: Type,
+  datetime: CalendarClock,
+  boolean: ToggleLeft,
+  json: Braces,
+  binary: Binary,
+}
+
+const KIND_LABEL: Record<ColumnKind, string> = {
+  number: "Number",
+  text: "Text",
+  datetime: "Date & time",
+  boolean: "Boolean",
+  json: "JSON",
+  binary: "Binary",
+}
+
+/**
+ * What a column holds, as an icon: the type spelled out (`varchar(255)`) made
+ * every header twice as wide as its values. The full type is in the tooltip.
+ */
+export function ColumnKindIcon({
+  kind,
+  primaryKey,
+  className,
+}: {
+  kind: ColumnKind
+  primaryKey?: boolean
+  className?: string
+}) {
+  if (primaryKey) {
+    return (
+      <KeyRound
+        aria-label="Primary key"
+        className={cn("size-3 shrink-0", className)}
+        style={toneStyle("amber")}
+      />
+    )
+  }
+  const Icon = KIND_ICON[kind]
+  return (
+    <Icon
+      aria-label={KIND_LABEL[kind]}
+      className={cn("size-3 shrink-0 text-muted-foreground/80", className)}
+    />
+  )
+}
+
+const FORMAT_ICON: Partial<Record<CellFormat["kind"], typeof Hash>> = {
+  email: Mail,
+  url: Link,
+  image: ImageIcon,
+  tag: CircleDot,
+  reference: Link2,
+  bool: SquareCheck,
+  text: Type,
+  number: Hash,
+  currency: DollarSign,
+  percent: Percent,
+  date: Calendar,
+  rating: Star,
+  progress: Gauge,
+  check: SquareCheck,
+  multitag: Tags,
+  duration: Timer,
+  phone: Phone,
+  colour: Palette,
+}
+
+const FORMAT_LABEL: Partial<Record<CellFormat["kind"], string>> = {
+  email: "Email",
+  url: "Link",
+  image: "Image",
+  tag: "Single select",
+  reference: "Link to another table",
+  bool: "Checkbox",
+  text: "Text",
+  number: "Number",
+  currency: "Currency",
+  percent: "Percent",
+  date: "Date",
+  rating: "Rating",
+  progress: "Progress",
+  check: "Checkbox",
+  multitag: "Multi select",
+  duration: "Duration",
+  phone: "Phone",
+  colour: "Colour",
+}
+
+/** A column's icon as it is drawn — an email as an envelope — or its kind's. */
+export function FieldIcon({
+  column,
+  format,
+  chosen,
+  className,
+}: {
+  column: { kind: ColumnKind; primaryKey?: boolean }
+  format: CellFormat
+  /** Set by the user rather than read off the column: drawn in the accent. */
+  chosen?: boolean
+  className?: string
+}) {
+  const Icon = column.primaryKey && !chosen ? undefined : FORMAT_ICON[format.kind]
+  if (!Icon) {
+    return (
+      <ColumnKindIcon kind={column.kind} primaryKey={column.primaryKey} className={className} />
+    )
+  }
+  return (
+    <Icon
+      aria-label={FORMAT_LABEL[format.kind]}
+      className={cn(
+        "size-3.5 shrink-0",
+        chosen ? "text-primary" : "text-muted-foreground/80",
+        className
+      )}
+    />
+  )
+}
+
+const TRUE = new Set(["true", "t", "yes", "y", "1"])
+const FALSE = new Set(["false", "f", "no", "n", "0"])
+
+export type GridColumn = Column & {
+  primaryKey?: boolean
+  nullable?: boolean
+  /** The table a foreign key on this column points at. */
+  references?: string
+  /** Shown, but not to be typed into — a generated column, say. */
+  readOnly?: boolean
+  /** Numbered by the database — an identity, a serial, AUTO_INCREMENT. */
+  auto?: boolean
+}
+
+/**
+ * Why a cell of this column is not typed into, or null when it may be: a
+ * generated column never; one the database numbers never; a key, not on a
+ * row that exists — the row is found by it — but yes on a new one.
+ */
+export function lockedBecause(column: GridColumn, isNew: boolean): string | null {
+  if (column.readOnly) return "Generated by the database"
+  if (column.auto) return "Numbered by the database"
+  if (column.primaryKey && !isNew) return "The primary key: the row is found by it"
+  return null
+}
+
+// ── Column widths ──────────────────────────────────────────────────────────
+
+const MIN_WIDTH = 56
+const MAX_WIDTH = 1200
+const GUTTER = 60
+const clampWidth = (width: number) => Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width)))
+
+const widthsKey = (key: string) => `veydata:column-widths:${key}`
+
+function storedWidths(key: string | undefined): Record<string, number> {
+  if (!key || typeof localStorage === "undefined") return {}
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(widthsKey(key)) ?? "{}")
+    if (!parsed || typeof parsed !== "object") return {}
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === "number" && value > 0)
+    ) as Record<string, number>
+  } catch {
+    return {}
+  }
+}
+
+function storeWidths(key: string | undefined, widths: Record<string, number>) {
+  if (!key || typeof localStorage === "undefined") return
+  try {
+    if (Object.keys(widths).length) localStorage.setItem(widthsKey(key), JSON.stringify(widths))
+    else localStorage.removeItem(widthsKey(key))
+  } catch {
+    // Full or off: the widths last as long as the tab.
+  }
+}
+
+/** The width of what is inside an element, however wide it is drawn. */
+function contentWidth(element: Element): number {
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  return range.getBoundingClientRect().width
+}
+
+/** Which row a cell belongs to: one that exists, or one about to be added. */
+export type RowTarget =
+  { kind: "row"; index: number } | { kind: "insert"; index: number }
+
+export const rowKey = (target: RowTarget) =>
+  `${target.kind === "row" ? "r" : "n"}${target.index}`
+
+export type GridEditing = {
+  /** Row index → column → the value it will be saved with. */
+  edits: Record<number, Record<string, Cell>>
+  inserts: Record<string, Cell>[]
+  deleted: Set<number>
+  selected: Set<string>
+  onSelect(target: RowTarget, mode: "replace" | "toggle" | "range"): void
+  onChange(target: RowTarget, column: string, value: Cell): void
+}
+
+/** How many rows are put on screen at once; the rest wait behind a button. */
+const CHUNK = 300
+
+const RATING_ICON: Record<RatingIcon, typeof Star> = {
+  star: Star,
+  heart: Heart,
+  "thumbs-up": ThumbsUp,
+  flag: Flag,
+  flame: Flame,
+  circle: Circle,
+}
+
+const CHECK_ICON: Record<Exclude<CheckIcon, "check">, typeof Star> = {
+  square: Square,
+  "circle-check": CircleCheck,
+  star: Star,
+  heart: Heart,
+  "thumbs-up": ThumbsUp,
+  flag: Flag,
+}
+
+/** A value of a small set as a tag, in its own colour or the one picked. */
+function Tag({ value, tone }: { value: string; tone?: Tone }) {
+  const colour = toneColor(tone ?? tagTone(value))
+  return (
+    <span
+      className="cell-tag"
+      style={{
+        background: `color-mix(in oklch, ${colour} 15%, transparent)`,
+        color: `color-mix(in oklch, ${colour} 60%, var(--foreground))`,
+      }}
+    >
+      {value}
+    </span>
+  )
+}
+
+/** A boolean as a checkbox, or as the icon picked for it, in its colour. */
+function CheckMark({
+  on,
+  icon,
+  tone,
+  title,
+}: {
+  on: boolean
+  icon: CheckIcon
+  tone: Tone
+  title: string
+}) {
+  if (icon === "check") {
+    return (
+      <span
+        className={cn("cell-check", on && "is-on")}
+        title={title}
+        style={on ? { ["--check" as string]: toneColor(tone) } : undefined}
+      >
+        {on && <Check strokeWidth={3} />}
+      </span>
+    )
+  }
+  const Icon = CHECK_ICON[icon]
+  return (
+    <Icon
+      aria-label={title}
+      className={cn("cell-check-icon", on && "is-on")}
+      style={on ? { ["--check" as string]: toneColor(tone) } : undefined}
+    />
+  )
+}
+
+/**
+ * A value as it reads best for its kind — still exactly the text the database
+ * printed, only set differently: NULL as a mark rather than a word, a
+ * boolean with its state as a dot, a timestamp's time a step quieter than its
+ * date.
+ */
+export function CellText({
+  value,
+  kind,
+  format,
+  raw,
+  placeholder,
+}: {
+  value: Cell | undefined
+  kind: ColumnKind
+  format: CellFormat
+  /** "Format values" is off: the text as printed, nothing else. */
+  raw: boolean
+  placeholder?: string
+}) {
+  if (value === undefined) {
+    return <span className="text-muted-foreground/70 italic">{placeholder}</span>
+  }
+  if (value === null) return <span className="cell-null">NULL</span>
+  if (value === "") {
+    return <span className="text-muted-foreground/50 italic">empty</span>
+  }
+  if (raw) return <>{value.includes("\n") ? value.replaceAll("\n", "↵") : value}</>
+  switch (format.kind) {
+    case "text":
+      return <>{value.includes("\n") ? value.replaceAll("\n", "↵") : value}</>
+    case "number":
+      return <>{formatNumber(value, format.decimals, format.separator, format.abbreviate)}</>
+    case "currency":
+      return (
+        <>
+          {formatCurrency(value, format.code, format.locale, format.decimals, format.abbreviate)}
+        </>
+      )
+    case "percent": {
+      const share = percentShare(value, format.scale)
+      if (share === null || format.progress === "none") {
+        return <>{formatPercent(value, format.decimals, format.scale)}</>
+      }
+      const shown = formatPercent(value, format.decimals, format.scale)
+      const clamped = Math.max(0, Math.min(1, share))
+      return format.progress === "circle" ? (
+        <span className="cell-progress" title={value}>
+          <span
+            className="cell-ring"
+            style={{
+              background: `conic-gradient(var(--primary) ${clamped * 360}deg, var(--muted) 0)`,
+            }}
+          />
+          <span className="tabular-nums">{shown}</span>
+        </span>
+      ) : (
+        <span className="cell-progress" title={value}>
+          <span className="cell-progress-track">
+            <span style={{ width: `${clamped * 100}%` }} />
+          </span>
+          <span className="tabular-nums">{shown}</span>
+        </span>
+      )
+    }
+    case "date":
+      return (
+        <span title={format.format === "iso" ? undefined : value}>
+          {formatDate(value, format.format, format.time, format.hour12, format.timezone)}
+        </span>
+      )
+    case "duration":
+      return <span title={value}>{formatDuration(value, format.unit, format.format)}</span>
+    case "rating": {
+      const score = Math.max(0, Math.min(format.max, Math.round(Number(value))))
+      if (!Number.isFinite(score)) break
+      const Icon = RATING_ICON[format.icon]
+      return (
+        <span
+          className="cell-rating"
+          title={value}
+          style={{ ["--rating" as string]: toneColor(format.color) }}
+        >
+          {Array.from({ length: format.max }, (_, index) => (
+            <Icon key={index} className={cn(index < score && "is-on")} />
+          ))}
+        </span>
+      )
+    }
+    case "progress": {
+      const number = Number(value)
+      if (!Number.isFinite(number)) break
+      const share = Math.max(0, Math.min(1, number / format.max))
+      return (
+        <span className="cell-progress" title={value}>
+          <span className="cell-progress-track">
+            <span style={{ width: `${share * 100}%` }} />
+          </span>
+          <span className="tabular-nums">{Math.round(share * 100)}%</span>
+        </span>
+      )
+    }
+    case "check": {
+      const lower = value.toLowerCase()
+      if (!TRUE.has(lower) && !FALSE.has(lower)) break
+      return <CheckMark on={TRUE.has(lower)} icon={format.icon} tone={format.color} title={value} />
+    }
+    case "multitag":
+      return (
+        <span className="inline-flex max-w-full gap-1 overflow-hidden align-middle">
+          {splitValues(value).map((item, index) => (
+            <Tag key={`${item}-${index}`} value={item} tone={format.colors?.[item]} />
+          ))}
+        </span>
+      )
+    case "phone":
+      return <span className="tabular-nums">{value}</span>
+    case "colour": {
+      const colour = cssColour(value)
+      if (!colour) break
+      return (
+        <span className="inline-flex items-center gap-1.5 align-middle">
+          <span className="cell-swatch" style={{ background: colour }} />
+          <span className="font-mono text-[11.5px]">{value}</span>
+        </span>
+      )
+    }
+    case "tag":
+      return <Tag value={value} tone={format.colors?.[value]} />
+    case "reference":
+      return (
+        <span className="cell-chip" title={`→ ${format.table}`}>
+          <Link2 className="size-3 shrink-0" style={toneStyle("blue")} />
+          {value}
+        </span>
+      )
+    case "email":
+      return <span className="cell-link">{value}</span>
+    case "url":
+      return (
+        <span className="cell-link" title="⌘-click to open">
+          {value}
+        </span>
+      )
+    case "decimal":
+      return <>{groupDigits(value)}</>
+    case "bool": {
+      const lower = value.toLowerCase()
+      if (!TRUE.has(lower) && !FALSE.has(lower)) break
+      return <CheckMark on={TRUE.has(lower)} icon="check" tone="blue" title={value} />
+    }
+    case "image":
+      return (
+        <img
+          src={value}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          className="cell-image"
+          title={value}
+        />
+      )
+  }
+  if (kind === "boolean") {
+    const lower = value.toLowerCase()
+    if (TRUE.has(lower) || FALSE.has(lower)) {
+      const on = TRUE.has(lower)
+      return (
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className="size-1.5 rounded-full"
+            style={{ background: on ? "var(--tone-green)" : "var(--tone-gray)" }}
+          />
+          <span className={cn(!on && "text-muted-foreground")}>{value}</span>
+        </span>
+      )
+    }
+  }
+  if (kind === "datetime") {
+    const split = /^(\d{4}-\d{2}-\d{2})([ T].+)$/.exec(value)
+    if (split) {
+      return (
+        <>
+          {split[1]}
+          <span className="text-muted-foreground">{split[2]}</span>
+        </>
+      )
+    }
+  }
+  // A cell is one line; what the value holds across lines is still there to
+  // edit or copy.
+  return <>{value.includes("\n") ? value.replaceAll("\n", "↵") : value}</>
+}
+
+function CellEditor({
+  initial,
+  nullable,
+  onCommit,
+  onCancel,
+}: {
+  initial: Cell | undefined
+  nullable: boolean
+  onCommit: (value: Cell) => void
+  onCancel: () => void
+}) {
+  const input = useRef<HTMLInputElement>(null)
+  // Enter, Escape and the NULL button each settle the edit, and each is
+  // followed by a blur that must not settle it a second time.
+  const settled = useRef(false)
+
+  useEffect(() => {
+    input.current?.focus()
+    input.current?.select()
+  }, [])
+
+  const settle = (action: () => void) => {
+    if (settled.current) return
+    settled.current = true
+    action()
+  }
+
+  return (
+    <div className="relative flex h-full w-full items-center bg-card ring-2 ring-ring ring-inset">
+      <input
+        ref={input}
+        defaultValue={initial ?? ""}
+        placeholder={initial === null ? "NULL" : ""}
+        spellCheck={false}
+        className="h-full min-w-0 flex-1 bg-transparent px-2 font-mono text-xs outline-none"
+        onBlur={(event) => {
+          const text = event.target.value
+          settle(() =>
+            // Leaving a NULL untouched leaves it NULL rather than making it
+            // an empty string.
+            text === "" && initial == null ? onCancel() : onCommit(text)
+          )
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault()
+            const text = event.currentTarget.value
+            settle(() => onCommit(text))
+          } else if (event.key === "Escape") {
+            event.preventDefault()
+            event.stopPropagation()
+            settle(onCancel)
+          }
+        }}
+      />
+      {nullable && (
+        <Button
+          variant="outline"
+          size="xs"
+          title="Set to NULL"
+          // Before the blur, which would otherwise commit the text first.
+          onMouseDown={(event) => {
+            event.preventDefault()
+            settle(() => onCommit(null))
+          }}
+          className="mr-0.5 h-5 px-1 font-sans text-[10px]"
+        >
+          NULL
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/** A column's menu, behind the chevron in its header. */
+function ColumnMenu({
+  column,
+  sorted,
+  onSortTo,
+  onEditField,
+  onFit,
+  onResetWidth,
+  onHide,
+}: {
+  column: GridColumn
+  sorted: Sort | null
+  onSortTo?: (sort: Sort | null) => void
+  onEditField?: () => void
+  onFit: () => void
+  /** Absent when it has its first width. */
+  onResetWidth?: () => void
+  /** Absent where columns cannot be hidden, or for the last one shown. */
+  onHide?: () => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label={`${column.name} options`}
+            className="column-menu"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <ChevronDown />
+          </button>
+        }
+      />
+      <DropdownMenuContent align="end" className="w-48">
+        {onEditField && (
+          <DropdownMenuItem onClick={onEditField}>
+            <Settings2 />
+            Field settings…
+          </DropdownMenuItem>
+        )}
+        {onEditField && <DropdownMenuSeparator />}
+        {onSortTo && (
+          <>
+            <DropdownMenuItem onClick={() => onSortTo({ column: column.name, direction: "asc" })}>
+              <ArrowUpNarrowWide />
+              Sort ascending
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onSortTo({ column: column.name, direction: "desc" })}>
+              <ArrowDownWideNarrow />
+              Sort descending
+            </DropdownMenuItem>
+            {sorted && (
+              <DropdownMenuItem onClick={() => onSortTo(null)}>
+                <X />
+                Clear sort
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+          </>
+        )}
+        <DropdownMenuItem onClick={onFit}>
+          <MoveHorizontal />
+          Fit width to content
+        </DropdownMenuItem>
+        {onResetWidth && (
+          <DropdownMenuItem onClick={onResetWidth}>
+            <RotateCcw />
+            Reset width
+          </DropdownMenuItem>
+        )}
+        {onHide && (
+          <DropdownMenuItem onClick={onHide}>
+            <EyeOff />
+            Hide field
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => void navigator.clipboard.writeText(column.name)}>
+          <Copy />
+          Copy column name
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+export function DataGrid({
+  columns,
+  rows,
+  firstRowNumber = 1,
+  sort,
+  onSort,
+  onSortTo,
+  fields,
+  onEditField,
+  editing,
+  widthKey,
+  hidden,
+  onHide,
+}: {
+  columns: GridColumn[]
+  rows: Cell[][]
+  firstRowNumber?: number
+  sort?: Sort | null
+  /** A header clicked: the next of ascending, descending, none. */
+  onSort?: (column: string) => void
+  /** A direction picked from a column's menu. */
+  onSortTo?: (sort: Sort | null) => void
+  /** The table's field settings: displays, descriptions, display value. */
+  fields?: TableFields
+  /** Opens a column's field settings; absent where there are none. */
+  onEditField?: (column: string) => void
+  /** Absent for a result that is only to be read. */
+  editing?: GridEditing
+  /** Where the widths a user drags are kept — one table's; none, for a
+   * result whose columns are the query's. */
+  widthKey?: string
+  /** Columns not drawn; a row opened as a form still has them all. */
+  hidden?: ReadonlySet<string>
+  onHide?: (column: string) => void
+}) {
+  const [shown, setShown] = useState(CHUNK)
+  const [active, setActive] = useState<{ row: string; column: string } | null>(
+    null
+  )
+  const [expanded, setExpanded] = useState<RowTarget | null>(null)
+
+  // A different result starts from the top again.
+  useEffect(() => {
+    setShown(CHUNK)
+    setActive(null)
+    setExpanded(null)
+  }, [rows])
+
+  const inserts = editing?.inserts ?? []
+
+  // Each column is measured once, as the browser lays its first rows out,
+  // and held at that width: typing into a cell, another page, more rows do
+  // not move it. Widths dragged by hand are kept per table.
+  const signature = columns.map((column) => column.name).join("\u0000")
+  const [widths, setWidths] = useState<Record<string, number>>(() => storedWidths(widthKey))
+  const resized = useRef<Record<string, number>>(storedWidths(widthKey))
+  const table = useRef<HTMLTableElement>(null)
+  const heads = useRef(new Map<string, HTMLTableCellElement>())
+  const [resizing, setResizing] = useState<string | null>(null)
+
+  useEffect(() => {
+    resized.current = storedWidths(widthKey)
+    setWidths(storedWidths(widthKey))
+  }, [widthKey, signature])
+
+  const seen = useMemo(
+    () => columns.filter((column) => !hidden?.has(column.name)),
+    [columns, hidden]
+  )
+  const isHidden = (name: string) => !!hidden?.has(name)
+  const missing = seen.some((column) => widths[column.name] === undefined)
+  useLayoutEffect(() => {
+    if (!missing) return
+    const measured: Record<string, number> = {}
+    for (const column of seen) {
+      if (widths[column.name] !== undefined) continue
+      const head = heads.current.get(column.name)
+      // At most what a cell showed before widths were held.
+      measured[column.name] = clampWidth(
+        Math.min(340, Math.max(120, head?.getBoundingClientRect().width ?? 0))
+      )
+    }
+    setWidths((current) => ({ ...measured, ...current }))
+  }, [missing, seen, widths])
+
+  const keep = (name: string, width: number | null) => {
+    if (width === null) delete resized.current[name]
+    else resized.current[name] = width
+    storeWidths(widthKey, { ...resized.current })
+  }
+
+  const startResize = (event: PointerEvent<HTMLElement>, name: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const startX = event.clientX
+    const start = widths[name] ?? heads.current.get(name)?.getBoundingClientRect().width ?? 120
+    let last = start
+    setResizing(name)
+    const move = (moved: globalThis.PointerEvent) => {
+      last = clampWidth(start + moved.clientX - startX)
+      setWidths((current) => ({ ...current, [name]: last }))
+    }
+    const up = () => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", up)
+      window.removeEventListener("pointercancel", up)
+      setResizing(null)
+      if (last !== start) keep(name, last)
+    }
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", up)
+    window.addEventListener("pointercancel", up)
+  }
+
+  /** As wide as the widest of its header and the rows on screen. */
+  const fit = (name: string) => {
+    const index = seen.findIndex((column) => column.name === name)
+    const element = table.current
+    if (index < 0 || !element) return
+    const head = heads.current.get(name)
+    const label = head?.querySelector(".column-name")
+    // The name, with room for its icon, the sort arrow and the menu.
+    let widest = label ? contentWidth(label) + 78 : 0
+    for (const cell of element.querySelectorAll(`tbody tr > :nth-child(${index + 2})`)) {
+      widest = Math.max(widest, contentWidth(cell) + 22)
+    }
+    const width = clampWidth(Math.min(widest, 600))
+    setWidths((current) => ({ ...current, [name]: width }))
+    keep(name, width)
+  }
+
+  const resetWidth = (name: string) => {
+    keep(name, null)
+    setWidths((current) => {
+      const { [name]: _gone, ...rest } = current
+      return rest
+    })
+  }
+
+  const formatting = useFormatValues((state) => state.on)
+  const compact = useRowHeight((state) => state.compact)
+  const formats: CellFormat[] = useMemo(
+    () =>
+      columns.map((column, index): CellFormat => {
+        if (!formatting) return { kind: "plain" }
+        const chosen = fields?.fields[column.name]?.display
+        if (chosen) return formatOfDisplay(chosen)
+        return detectFormat(
+          column,
+          rows.map((row) => row[index] ?? null)
+        )
+      }),
+    [columns, rows, formatting, fields]
+  )
+  const chosenDisplay = fields?.displayColumn
+    ? columns.findIndex((column) => column.name === fields.displayColumn)
+    : -1
+  const display = !formatting
+    ? -1
+    : chosenDisplay >= 0
+      ? chosenDisplay
+      : displayColumn(columns, formats)
+
+  /** A row's values as they stand, its pending edits applied. */
+  const valuesOf = (target: RowTarget): (Cell | undefined)[] => {
+    if (target.kind === "insert") {
+      return columns.map((column) => inserts[target.index]?.[column.name])
+    }
+    const edits = editing?.edits[target.index]
+    return columns.map((column, index) =>
+      edits && column.name in edits ? edits[column.name] : rows[target.index]?.[index]
+    )
+  }
+
+  const renderRow = (target: RowTarget, values: (Cell | undefined)[]) => {
+    const key = rowKey(target)
+    const isInsert = target.kind === "insert"
+    const deleted = !isInsert && !!editing?.deleted.has(target.index)
+    const edits = isInsert ? undefined : editing?.edits[target.index]
+    const selected = !!editing?.selected.has(key)
+
+    return (
+      <tr
+        key={key}
+        className={cn(
+          selected && "is-selected",
+          isInsert && "is-added",
+          deleted && "is-deleted"
+        )}
+      >
+        <td
+          className="gutter"
+          onClick={
+            editing
+              ? (event) =>
+                  editing.onSelect(
+                    target,
+                    event.shiftKey
+                      ? "range"
+                      : event.metaKey || event.ctrlKey
+                        ? "toggle"
+                        : "replace"
+                  )
+              : undefined
+          }
+        >
+          <span className="row-num">
+            {isInsert ? "+" : `${firstRowNumber + target.index}.`}
+          </span>
+          <span className="row-actions">
+            {editing && (
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={selected}
+                aria-label="Select row"
+                className={cn("cell-check", selected && "is-on")}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  editing.onSelect(target, "toggle")
+                }}
+              >
+                {selected && <Check strokeWidth={3} />}
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label="Expand row"
+              title="Expand row"
+              className="row-expand"
+              onClick={(event) => {
+                event.stopPropagation()
+                setExpanded(target)
+              }}
+            >
+              <Maximize2 />
+            </button>
+          </span>
+        </td>
+        {columns.map((column, index) => {
+          if (isHidden(column.name)) return null
+          const edited = edits !== undefined && column.name in edits
+          const value = edited ? edits[column.name] : values[index]
+          const isEditing =
+            active?.row === key && active.column === column.name
+          const locked = editing ? lockedBecause(column, isInsert) : null
+          const canEdit = !!editing && !deleted && !locked
+          const format = formats[index] ?? { kind: "plain" }
+
+          if (isEditing && editing) {
+            return (
+              <td key={column.name} className="is-editing">
+                <CellEditor
+                  initial={value}
+                  nullable={column.nullable ?? true}
+                  onCancel={() => setActive(null)}
+                  onCommit={(next) => {
+                    setActive(null)
+                    editing.onChange(target, column.name, next)
+                  }}
+                />
+              </td>
+            )
+          }
+
+          return (
+            <td
+              key={column.name}
+              className={cn(
+                ((column.kind === "number" &&
+                  (format.kind === "plain" || format.kind === "decimal")) ||
+                  format.kind === "number" ||
+                  format.kind === "currency" ||
+                  format.kind === "duration" ||
+                  (format.kind === "percent" && format.progress === "none")) &&
+                  "text-right",
+                (format.kind === "bool" || format.kind === "check" || format.kind === "image") &&
+                  "text-center",
+                (column.kind === "json" || column.kind === "binary") && "is-code",
+                index === display && "cell-display",
+                edited && "is-edited",
+                locked && "is-locked"
+              )}
+              title={
+                locked && !deleted
+                  ? `${locked} — not edited here`
+                  : value != null && value.length > 40
+                    ? value
+                    : undefined
+              }
+              onDoubleClick={
+                canEdit
+                  ? () => setActive({ row: key, column: column.name })
+                  : undefined
+              }
+              onClick={
+                format.kind === "url" && value
+                  ? (event) => {
+                      // ⌘-click (Ctrl elsewhere): the main process hands an
+                      // http(s) address to the browser.
+                      if (event.metaKey || event.ctrlKey) {
+                        window.open(value, "_blank", "noopener")
+                      }
+                    }
+                  : undefined
+              }
+            >
+              <CellText
+                value={value}
+                kind={column.kind}
+                format={format}
+                raw={!formatting}
+                placeholder="default"
+              />
+            </td>
+          )
+        })}
+      </tr>
+    )
+  }
+
+  const total = rows.length + inserts.length
+  const step = (target: RowTarget, by: number): RowTarget | null => {
+    const flat = target.kind === "row" ? target.index : rows.length + target.index
+    const next = flat + by
+    if (next < 0 || next >= total) return null
+    return next < rows.length
+      ? { kind: "row", index: next }
+      : { kind: "insert", index: next - rows.length }
+  }
+
+  return (
+    <div className="h-full overflow-auto">
+      <table
+        ref={table}
+        className={cn(
+          "grid-table",
+          compact && "is-compact",
+          !editing && "selectable",
+          !missing && "is-fixed",
+          resizing && "is-resizing"
+        )}
+        style={
+          missing
+            ? undefined
+            : {
+                width:
+                  GUTTER + seen.reduce((sum, column) => sum + (widths[column.name] ?? 0), 0),
+              }
+        }
+      >
+        {!missing && (
+          <colgroup>
+            <col style={{ width: GUTTER }} />
+            {seen.map((column) => (
+              <col key={column.name} style={{ width: widths[column.name] }} />
+            ))}
+          </colgroup>
+        )}
+        <thead>
+          <tr>
+            <th className="gutter">#</th>
+            {columns.map((column, index) => {
+              if (isHidden(column.name)) return null
+              const sorted = sort?.column === column.name ? sort : null
+              return (
+                <th
+                  key={column.name}
+                  ref={(element) => {
+                    if (element) heads.current.set(column.name, element)
+                    else heads.current.delete(column.name)
+                  }}
+                  aria-sort={
+                    sorted
+                      ? sorted.direction === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : undefined
+                  }
+                  className={cn("group/th", onSort && "cursor-pointer")}
+                  title={[
+                    column.name,
+                    column.type,
+                    column.primaryKey ? "primary key" : "",
+                    column.nullable === false ? "not null" : "",
+                    column.references ? `→ ${column.references}` : "",
+                    fields?.fields[column.name]?.description ?? "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  onClick={
+                    onSort
+                      ? (event) => {
+                          // React bubbles a click in the column's menu — a
+                          // portal — up to here; only a click on the header
+                          // itself, not on its menu button, sorts.
+                          const target = event.target as Element
+                          if (!event.currentTarget.contains(target)) return
+                          if (target.closest(".column-menu, .col-resize")) return
+                          onSort(column.name)
+                        }
+                      : undefined
+                  }
+                >
+                  <span className="flex items-center gap-2">
+                    <FieldIcon
+                      column={column}
+                      format={formats[index] ?? { kind: "plain" }}
+                      chosen={formatting && !!fields?.fields[column.name]?.display}
+                    />
+                    <span className="column-name min-w-0 truncate">{column.name}</span>
+                    {fields?.fields[column.name]?.description && (
+                      <Info
+                        aria-label={fields.fields[column.name]!.description}
+                        className="size-3 shrink-0 text-muted-foreground"
+                      >
+                        <title>{fields.fields[column.name]!.description}</title>
+                      </Info>
+                    )}
+                    <span className="flex-1" />
+                    {sorted &&
+                      (sorted.direction === "asc" ? (
+                        <ArrowUp className="size-3 shrink-0" style={toneStyle("blue")} />
+                      ) : (
+                        <ArrowDown className="size-3 shrink-0" style={toneStyle("blue")} />
+                      ))}
+                    <ColumnMenu
+                      column={column}
+                      sorted={sorted}
+                      onSortTo={onSortTo}
+                      onEditField={onEditField ? () => onEditField(column.name) : undefined}
+                      onFit={() => fit(column.name)}
+                      onResetWidth={
+                        widthKey && column.name in resized.current
+                          ? () => resetWidth(column.name)
+                          : undefined
+                      }
+                      onHide={
+                        onHide && seen.length > 1 ? () => onHide(column.name) : undefined
+                      }
+                    />
+                  </span>
+                  {/* Drag to widen or narrow; double-click to fit. */}
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={`Resize ${column.name}`}
+                    title="Drag to resize · double-click to fit"
+                    className={cn("col-resize", resizing === column.name && "is-active")}
+                    onPointerDown={(event) => startResize(event, column.name)}
+                    onClick={(event) => event.stopPropagation()}
+                    onDoubleClick={(event) => {
+                      event.stopPropagation()
+                      fit(column.name)
+                    }}
+                  />
+                </th>
+              )
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {rows
+            .slice(0, shown)
+            .map((row, index) => renderRow({ kind: "row", index }, row))}
+          {shown >= rows.length &&
+            inserts.map((insert, index) =>
+              renderRow(
+                { kind: "insert", index },
+                columns.map((column) => insert[column.name])
+              )
+            )}
+        </tbody>
+      </table>
+
+      {rows.length > shown && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShown(shown + CHUNK * 2)}
+          className="sticky left-0 m-2"
+        >
+          Show more rows ({(rows.length - shown).toLocaleString()} hidden)
+        </Button>
+      )}
+
+      {expanded && (
+        <RecordDialog
+          rowId={rowKey(expanded)}
+          columns={columns}
+          formats={formats}
+          values={valuesOf(expanded)}
+          edited={
+            expanded.kind === "row"
+              ? Object.keys(editing?.edits[expanded.index] ?? {})
+              : []
+          }
+          title={
+            (display >= 0 ? valuesOf(expanded)[display] : null) ||
+            (expanded.kind === "insert"
+              ? "New row"
+              : `Row ${firstRowNumber + expanded.index}`)
+          }
+          raw={!formatting}
+          editable={
+            !!editing && !(expanded.kind === "row" && editing.deleted.has(expanded.index))
+          }
+          isNew={expanded.kind === "insert"}
+          onChange={(column, value) => editing?.onChange(expanded, column, value)}
+          onPrevious={step(expanded, -1) ? () => setExpanded(step(expanded, -1)) : undefined}
+          onNext={step(expanded, 1) ? () => setExpanded(step(expanded, 1)) : undefined}
+          onClose={() => setExpanded(null)}
+        />
+      )}
+    </div>
+  )
+}
