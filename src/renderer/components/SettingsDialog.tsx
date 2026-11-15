@@ -1,5 +1,9 @@
 import {
   ArrowUpRight,
+  BookOpen,
+  Languages,
+  MessageSquare,
+  Sparkles,
   BookMarked,
   ChartColumn,
   ChevronRight,
@@ -31,6 +35,13 @@ import {
   type ToolMode,
 } from "@shared/agent"
 import {
+  AI_LANGUAGES,
+  SQL_INSTRUCTIONS_MAX,
+  SQL_KEYWORD_CASES,
+  type AiSettings,
+  type AiTask,
+  type ChatEffort,
+  type SqlKeywordCase,
   ACCESS_MODES,
   OBJECT_ACCESS,
   RULES,
@@ -67,6 +78,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { ACCESS_DETAIL, ACCESS_ICON, ACCESS_LABEL } from "@/lib/access"
+import { useAgentModels } from "@/lib/models"
 import { errorMessage, useStore, type SettingsSection } from "@/lib/store"
 import { connectionTone, IconTile, KIND_TONE } from "@/lib/tones"
 import { cn } from "@/lib/utils"
@@ -75,6 +87,7 @@ import { AuditLogPage } from "./AuditLogPage"
 import { confirm } from "./confirm"
 import { IconButton } from "./icon-button"
 import { Markdown } from "./Markdown"
+import { ModelMenu, type NoModelRow } from "./model-menu"
 import { SimpleSelect } from "./simple-select"
 import { ErrorNote } from "./state-view"
 import { Switch } from "./switch"
@@ -1221,6 +1234,254 @@ function PermissionsPage({ onTools }: { onTools: () => void }) {
   )
 }
 
+// ── Models & language ──────────────────────────────────────────────────────
+
+const LANGUAGE_LABEL: Record<(typeof AI_LANGUAGES)[number], string> = {
+  English: "English",
+  Vietnamese: "Tiếng Việt",
+  Japanese: "日本語",
+  Korean: "한국어",
+  "Chinese (Simplified)": "简体中文",
+  "Chinese (Traditional)": "繁體中文",
+  Thai: "ไทย",
+  Indonesian: "Bahasa Indonesia",
+  French: "Français",
+  German: "Deutsch",
+  Spanish: "Español",
+  Portuguese: "Português",
+}
+
+/** The select's value for "the language of the request". */
+const AUTO = "auto"
+/** The row for a task that runs on whatever the chat's picker shows. */
+const FOLLOW_CHAT: NoModelRow = {
+  label: "Same as the chat",
+  description: "The model and effort picked under the chat box",
+}
+
+const TASKS: { task: AiTask; label: string; description: string; icon: LucideIcon; tone: Tone }[] = [
+  {
+    task: "chat",
+    label: "Chat",
+    description: "What a new chat starts on. The picker under the chat box still changes it for one session.",
+    icon: MessageSquare,
+    tone: "blue",
+  },
+  {
+    task: "generate",
+    label: "Generate SQL",
+    description: "Writes a statement from a description, in the SQL editor.",
+    icon: Sparkles,
+    tone: KIND_TONE.query,
+  },
+  {
+    task: "explain",
+    label: "Explain SQL",
+    description: "Says what the statement in the editor — or the selected part — does. A fast model is usually enough.",
+    icon: BookOpen,
+    tone: KIND_TONE.query,
+  },
+  {
+    task: "fix",
+    label: "Fix SQL",
+    description: "Corrects a statement that failed, from the server's error.",
+    icon: Wrench,
+    tone: KIND_TONE.query,
+  },
+]
+
+const KEYWORD_CASE_LABEL: Record<SqlKeywordCase, string> = {
+  keep: "As in the editor",
+  upper: "UPPER",
+  lower: "lower",
+}
+
+/** One setting: what it is and what it does on the left, the control on the right. */
+function AiRow({
+  icon,
+  label,
+  description,
+  children,
+}: {
+  icon?: ReactNode
+  label: string
+  description: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <div className="flex items-center gap-4 px-3.5 py-3">
+      {icon}
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-medium">{label}</div>
+        <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{description}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">{children}</div>
+    </div>
+  )
+}
+
+function AiPage() {
+  const ai = useStore((state) => state.ai)
+  const save = useStore((state) => state.setAiSettings)
+  const models = useAgentModels()
+  const [error, setError] = useState<string | null>(null)
+  const [instructions, setInstructions] = useState(ai.sqlInstructions)
+
+  const change = async (next: AiSettings) => {
+    setError(null)
+    try {
+      await save(next)
+    } catch (failure) {
+      setError(errorMessage(failure))
+    }
+  }
+
+  // Typed instructions are kept a moment after the last key, and on leaving.
+  useEffect(() => {
+    if (instructions === ai.sqlInstructions) return
+    const timer = setTimeout(() => void change({ ...ai, sqlInstructions: instructions }), 600)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instructions])
+
+  const pick = (task: AiTask, model: string | null, effort: ChatEffort | null) =>
+    void change({ ...ai, models: { ...ai.models, [task]: { model, effort } } })
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <PageHeader title="Models & language">
+        Which model answers where, how much it thinks before it does, and in what
+        language. It runs on your own <code className="font-mono text-[11px]">claude</code>,
+        so the models are the ones your account offers.
+      </PageHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        {error && <ErrorNote className="mt-4">{error}</ErrorNote>}
+
+        <section className="pt-5">
+          <h3 className="pb-2 text-xs font-semibold">Language</h3>
+          <div className="rounded-lg border bg-card">
+            <AiRow
+              icon={
+                <IconTile tone="green" size="sm">
+                  <Languages />
+                </IconTile>
+              }
+              label="Answer in"
+              description="Chat answers, explanations and what Generate and Fix say about their SQL. SQL, table names and values stay as they are."
+            >
+              <SimpleSelect
+                label="Answer in"
+                heading="Answer in"
+                size="default"
+                className="w-52 justify-between"
+                value={ai.language ?? AUTO}
+                items={{
+                  [AUTO]: "The language you write in",
+                  ...Object.fromEntries(
+                    AI_LANGUAGES.map((language) => [language, LANGUAGE_LABEL[language]])
+                  ),
+                }}
+                onChange={(value) =>
+                  void change({ ...ai, language: value === AUTO ? null : value })
+                }
+              />
+            </AiRow>
+          </div>
+        </section>
+
+        <section className="pt-5">
+          <h3 className="pb-2 text-xs font-semibold">Models</h3>
+          <div className="divide-y rounded-lg border bg-card">
+            {TASKS.map(({ task, label, description, icon: Icon, tone }) => {
+              const choice = ai.models[task]
+              return (
+                <AiRow
+                  key={task}
+                  icon={
+                    <IconTile tone={tone} size="sm">
+                      <Icon />
+                    </IconTile>
+                  }
+                  label={label}
+                  description={description}
+                >
+                  {/* The chat's own menu: models, their efforts, reload. */}
+                  <ModelMenu
+                    variant="field"
+                    label={`${label} model`}
+                    className="w-60"
+                    models={models}
+                    model={choice.model}
+                    effort={choice.effort}
+                    none={task === "chat" ? undefined : FOLLOW_CHAT}
+                    onPick={(model, effort) => pick(task, model, effort)}
+                  />
+                </AiRow>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+            More effort thinks longer before answering: better on a hard query, slower and
+            costlier on an easy one.
+          </p>
+        </section>
+
+        <section className="pt-5">
+          <h3 className="pb-2 text-xs font-semibold">SQL the assistant writes</h3>
+          <div className="divide-y rounded-lg border bg-card">
+            <AiRow
+              label="Keywords"
+              description="How SELECT, FROM and the like are written, in the chat and in the editor."
+            >
+              <Segmented
+                label="Keywords"
+                value={ai.keywordCase}
+                onChange={(keywordCase) => void change({ ...ai, keywordCase })}
+                options={SQL_KEYWORD_CASES.map((value) => ({
+                  value,
+                  label: KEYWORD_CASE_LABEL[value],
+                }))}
+              />
+            </AiRow>
+            <div className="flex flex-col gap-2 px-3.5 py-3">
+              <div>
+                <label htmlFor="sql-instructions" className="text-[13px] font-medium">
+                  Instructions for Generate, Explain and Fix
+                </label>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  Said to the SQL editor&apos;s helper every time. For the chat, write a skill
+                  instead.
+                </p>
+              </div>
+              <textarea
+                id="sql-instructions"
+                value={instructions}
+                maxLength={SQL_INSTRUCTIONS_MAX}
+                onChange={(event) => setInstructions(event.target.value)}
+                onBlur={() => {
+                  if (instructions !== ai.sqlInstructions) {
+                    void change({ ...ai, sqlInstructions: instructions })
+                  }
+                }}
+                placeholder={"Always end a SELECT with LIMIT 100.\nUse CTEs rather than nested subqueries.\nOur weeks start on Monday."}
+                className="min-h-24 resize-y rounded-md border bg-background px-3 py-2 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+              />
+              <div className="flex text-[11px] text-muted-foreground">
+                <span className="flex-1">
+                  {instructions === ai.sqlInstructions ? (instructions ? "Saved." : "") : "Saving…"}
+                </span>
+                <span className="tabular-nums">
+                  {instructions.length.toLocaleString()} / {SQL_INSTRUCTIONS_MAX.toLocaleString()}
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  )
+}
+
 // ── The dialog ─────────────────────────────────────────────────────────────
 
 const NAV: {
@@ -1230,6 +1491,7 @@ const NAV: {
   {
     heading: "Assistant",
     items: [
+      { id: "ai", label: "Models & language", icon: Sparkles, tone: "pink" },
       { id: "skills", label: "Skills", icon: ScrollText, tone: KIND_TONE.skill },
       { id: "tools", label: "Tools", icon: Wrench, tone: KIND_TONE.tool },
     ],
@@ -1259,7 +1521,7 @@ export function SettingsDialog({
         <nav className="flex w-52 shrink-0 flex-col border-r bg-sidebar px-2 py-3">
           <DialogTitle className="px-2.5 pb-2 text-[13px] font-semibold">Settings</DialogTitle>
           <DialogDescription className="sr-only">
-            The assistant's skills and tools, what each connection allows, and the audit log
+            The assistant's models, language, skills and tools, what each connection allows, and the audit log
           </DialogDescription>
           {NAV.map((group) => (
             <div key={group.heading} className="flex flex-col gap-px pt-3">
@@ -1288,7 +1550,9 @@ export function SettingsDialog({
             </div>
           ))}
         </nav>
-        {section === "skills" ? (
+        {section === "ai" ? (
+          <AiPage />
+        ) : section === "skills" ? (
           <SkillsPage />
         ) : section === "tools" ? (
           <ToolsPage />

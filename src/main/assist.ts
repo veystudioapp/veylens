@@ -3,13 +3,13 @@ import path from "node:path"
 
 import { query } from "@anthropic-ai/claude-agent-sdk"
 
-import type { AssistInput, AssistResult } from "../shared/api"
+import type { AiSettings, AssistInput, AssistResult } from "../shared/api"
 import { createDbTools, TOOL_PREFIX, TOOL_SERVER } from "./agent-tools"
 import { claudeEnvironment, locateClaude } from "./claude-bin"
 import type { Connections } from "./connections"
 import type { Library } from "./library"
 
-const ASSIST_PROMPT = `You are the SQL assistant built into the query editor of Vey Data, a desktop database explorer. You are asked one thing about the SQL in the editor — write it, explain it, or fix it — and you answer once; there is no conversation.
+const ASSIST_PROMPT_BASE = `You are the SQL assistant built into the query editor of Vey Data, a desktop database explorer. You are asked one thing about the SQL in the editor — write it, explain it, or fix it — and you answer once; there is no conversation.
 
 Use your tools to look before you write: list_tables and describe_table for the real names, get_business_context for what the data means and the metrics the user defined (use a defined metric's SQL when the request involves it), run_query to check that a statement you propose runs and returns what was meant. Every tool is read-only.
 
@@ -17,7 +17,35 @@ Write the connection's dialect. Keep a statement the user wrote as close to thei
 
 Reply with:
 - sql: the complete statement for the editor, or null when the request was only to explain.
-- text: a short Markdown answer in the language of the request (or English if there is none): for an explanation, what the statement does, step by step, and anything surprising or slow about it; for a fix, what was wrong and what you changed; for a new statement, what it returns and any assumption you made.`
+- text: a short Markdown answer in LANGUAGE: for an explanation, what the statement does, step by step, and anything surprising or slow about it; for a fix, what was wrong and what you changed; for a new statement, what it returns and any assumption you made.`
+
+const KEYWORD_RULE: Record<AiSettings["keywordCase"], string | null> = {
+  keep: null,
+  upper: "Write SQL keywords and built-in function names in UPPER CASE (SELECT, FROM, COUNT). Leave table and column names as the database has them.",
+  lower: "Write SQL keywords and built-in function names in lower case (select, from, count). Leave table and column names as the database has them.",
+}
+
+/** The helper's instructions, with what the user set in Settings › Models &
+ * language: the language of its answers, how its SQL is spelt, and their own
+ * words. */
+export function assistPrompt(ai: AiSettings): string {
+  const parts = [
+    ASSIST_PROMPT_BASE.replace(
+      "LANGUAGE",
+      ai.language
+        ? `${ai.language}, whatever language the request is in (the user chose it in Settings); SQL, names and values stay as they are`
+        : "the language of the request (or English if there is none)"
+    ),
+  ]
+  const keywords = KEYWORD_RULE[ai.keywordCase]
+  if (keywords) parts.push(keywords)
+  if (ai.sqlInstructions.trim()) {
+    parts.push(
+      `The user's own instructions for this helper — follow them unless they ask for a change to data or contradict the rules above:\n${ai.sqlInstructions.trim()}`
+    )
+  }
+  return parts.join("\n\n")
+}
 
 const OUTPUT_SCHEMA = {
   type: "object",
@@ -108,6 +136,13 @@ export class Assist {
       "assist"
     )
 
+    // What Settings › Models & language says for this task; a task left to
+    // follow the chat runs on what the chat's picker shows.
+    const ai = this.library.aiSettings()
+    const choice = ai.models[input.mode]
+    const model = choice.model ?? input.model
+    const effort = choice.model ? choice.effort : input.effort
+
     let stderr = ""
     try {
       const conversation = query({
@@ -119,9 +154,9 @@ export class Assist {
           cwd: this.workspace,
           pathToClaudeCodeExecutable: binary.path,
           env: claudeEnvironment(binary),
-          ...(input.model ? { model: input.model } : {}),
-          ...(input.effort ? { effort: input.effort } : {}),
-          systemPrompt: ASSIST_PROMPT,
+          ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          systemPrompt: assistPrompt(ai),
           tools: [],
           mcpServers: { [TOOL_SERVER]: tools },
           strictMcpConfig: true,

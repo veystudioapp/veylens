@@ -822,6 +822,65 @@ export const CHAT_MODEL_FALLBACK: AgentModel[] = [
   },
 ]
 
+// ── AI settings ────────────────────────────────────────────────────────────
+
+/** What the assistant is asked to do: the chat, and the SQL editor's three. */
+export const AI_TASKS = ["chat", "generate", "explain", "fix"] as const
+export type AiTask = (typeof AI_TASKS)[number]
+
+/**
+ * The model and effort a task runs on. For the SQL editor's tasks a null
+ * model follows the chat's picker, effort and all; the chat's is what a new
+ * chat starts on, which its picker can still change for the session.
+ */
+export type AiModelChoice = { model: string | null; effort: ChatEffort | null }
+
+/** How SQL the assistant writes spells its keywords. `keep` follows the
+ * statement in the editor, or the assistant's habit when there is none. */
+export const SQL_KEYWORD_CASES = ["keep", "upper", "lower"] as const
+export type SqlKeywordCase = (typeof SQL_KEYWORD_CASES)[number]
+
+/** The languages offered for answers, by their English names — which is
+ * how the assistant is told. */
+export const AI_LANGUAGES = [
+  "English",
+  "Vietnamese",
+  "Japanese",
+  "Korean",
+  "Chinese (Simplified)",
+  "Chinese (Traditional)",
+  "Thai",
+  "Indonesian",
+  "French",
+  "German",
+  "Spanish",
+  "Portuguese",
+] as const
+
+export type AiSettings = {
+  /** What answers are written in; null is the language of the request. */
+  language: string | null
+  models: Record<AiTask, AiModelChoice>
+  keywordCase: SqlKeywordCase
+  /** Told to the SQL editor's helper on every Generate, Explain and Fix. */
+  sqlInstructions: string
+}
+
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+  language: null,
+  models: {
+    chat: { model: "default", effort: "medium" },
+    generate: { model: null, effort: null },
+    explain: { model: null, effort: null },
+    fix: { model: null, effort: null },
+  },
+  keywordCase: "keep",
+  sqlInstructions: "",
+}
+
+/** The longest instructions kept for the SQL helper. */
+export const SQL_INSTRUCTIONS_MAX = 4000
+
 /** The levels a model takes; every level where nobody could ask. */
 export function chatEfforts(
   models: AgentModel[],
@@ -1051,6 +1110,9 @@ export type DesktopApi = {
   /** Only the tools set away from their default; see `effectiveToolMode`. */
   getToolModes(): Promise<ToolModes>
   setToolMode(tool: string, mode: ToolMode): Promise<ToolModes>
+  /** Models, effort and language for the chat and the SQL editor's helper. */
+  getAiSettings(): Promise<AiSettings>
+  setAiSettings(settings: AiSettings): Promise<AiSettings>
 
   /** One question about the SQL in an editor, answered by the agent. */
   assistSql(input: AssistInput): Promise<AssistResult>
@@ -1101,6 +1163,8 @@ export const IPC = {
   setDisplayColumn: "fields:display-column",
   getToolModes: "tools:modes",
   setToolMode: "tools:set-mode",
+  getAiSettings: "ai:settings",
+  setAiSettings: "ai:set-settings",
   listObjects: "db:objects",
   setPermissions: "connections:permissions",
   assistSql: "assist:sql",

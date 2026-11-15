@@ -122,6 +122,46 @@
   --tone-gray: oklch(0.7 0.02 252);
 }
 
+/* SQL, coloured (`components/sql-code.tsx`). The tones' hues, darker in light
+ * and lighter in dark than the tones themselves, which are made for icons:
+ * these are read as text. No weight or slant, so a coloured copy over a
+ * textarea keeps its letters on the textarea's own. */
+:root {
+  --sql-keyword: oklch(0.5 0.17 252);
+  --sql-type: oklch(0.52 0.1 195);
+  --sql-function: oklch(0.52 0.18 350);
+  --sql-string: oklch(0.5 0.13 150);
+  --sql-number: oklch(0.56 0.15 48);
+  --sql-param: oklch(0.53 0.19 25);
+}
+
+.dark {
+  --sql-keyword: oklch(0.76 0.13 252);
+  --sql-type: oklch(0.78 0.09 195);
+  --sql-function: oklch(0.78 0.13 350);
+  --sql-string: oklch(0.78 0.13 150);
+  --sql-number: oklch(0.8 0.13 55);
+  --sql-param: oklch(0.76 0.15 25);
+}
+
+.sql-keyword { color: var(--sql-keyword); }
+.sql-type { color: var(--sql-type); }
+.sql-function { color: var(--sql-function); }
+.sql-string { color: var(--sql-string); }
+.sql-number { color: var(--sql-number); }
+.sql-param { color: var(--sql-param); }
+.sql-comment { color: var(--muted-foreground); }
+
+/* The textarea under a coloured copy: its own letters gone, its caret and
+ * selection kept. */
+.sql-input {
+  color: transparent !important;
+  caret-color: var(--foreground);
+}
+.sql-input::selection {
+  color: transparent;
+}
+
 /* A white sheet on the window ground: the viewer and the chat. In the
  * components layer, so a utility on the same element — `border-t-0` under
  * the open tab — wins over it, as utilities should. */

@@ -58,7 +58,7 @@ export function App() {
             >
               <Explorer
                 onCollapse={() => explorer.current?.collapse()}
-                onSettings={() => openSettings("skills")}
+                onSettings={() => openSettings("ai")}
               />
             </ResizablePanel>
             <ResizableHandle className="w-1.5 bg-transparent" />

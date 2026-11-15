@@ -1,6 +1,8 @@
 import {
   CheckIcon,
+  ChevronDownIcon,
   RefreshCw,
+  Settings2,
   Signal,
   SignalHigh,
   SignalLow,
@@ -29,9 +31,10 @@ import {
   orderedModels,
   reloadAgentModels,
 } from "@/lib/models"
+import { useStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 
-const EFFORT_LABELS: Record<ChatEffort, string> = {
+export const EFFORT_LABELS: Record<ChatEffort, string> = {
   low: "Low",
   medium: "Medium",
   high: "High",
@@ -74,6 +77,44 @@ export function ToolbarButton({
       <span className="min-w-0 truncate">{label}</span>
     </button>
   )
+}
+
+/** The same menu's trigger in a form: drawn as the form's selects are, with
+ * the model and its effort on it. */
+function FieldButton({
+  icon,
+  label,
+  className,
+  ...rest
+}: {
+  icon: ReactNode
+  label: string
+} & ComponentProps<"button">) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex h-8 min-w-0 items-center gap-1.5 rounded-lg border border-input bg-transparent pr-2 pl-2.5 text-xs whitespace-nowrap transition-colors outline-none select-none",
+        "hover:bg-accent/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-[popup-open]:border-ring dark:bg-input/30 dark:hover:bg-input/50",
+        "[&>svg]:size-3.5 [&>svg]:shrink-0",
+        className
+      )}
+      {...rest}
+    >
+      {icon}
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+      <ChevronDownIcon className="size-4! text-muted-foreground" />
+    </button>
+  )
+}
+
+/** The row for no model of its own: `Inherit` in the chat, "Same as the
+ * chat" for a task that follows it. */
+export type NoModelRow = { label: string; description: string }
+
+const INHERIT: NoModelRow = {
+  label: "Inherit",
+  description: "Use the model in your Claude Code settings",
 }
 
 function EffortIcon({ effort }: { effort: ChatEffort }) {
@@ -131,11 +172,23 @@ export function ModelMenu({
   model,
   effort,
   onPick,
+  variant = "toolbar",
+  none = INHERIT,
+  label,
+  className,
 }: {
   models: AgentModel[]
   model: string | null
   effort: ChatEffort | null
   onPick: (model: string | null, effort: ChatEffort | null) => void
+  /** The composer's toolbar, or a form — Settings, which it also links to
+   * from the toolbar. */
+  variant?: "toolbar" | "field"
+  /** What the row for a null model says. */
+  none?: NoModelRow
+  /** The trigger's accessible name. */
+  label?: string
+  className?: string
 }) {
   const rows = orderedModels(models)
   const chosen = rows.find((entry) => entry.value === model)
@@ -143,6 +196,7 @@ export function ModelMenu({
   // Held only so the digit shortcuts can close it.
   const [open, setOpen] = useState(false)
   const reloading = isReloadingModels()
+  const openSettings = useStore((state) => state.openSettings)
 
   // The toolbar names the model that answers, not the row that asked for it.
   const nameOf = (entry: AgentModel) =>
@@ -150,7 +204,7 @@ export function ModelMenu({
 
   const buttonLabel =
     model === null
-      ? "Inherit"
+      ? none.label
       : chosen
         ? effort && chatEfforts(models, model).includes(effort)
           ? `${nameOf(chosen)} · ${EFFORT_LABELS[effort]}`
@@ -161,17 +215,27 @@ export function ModelMenu({
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         render={
-          <ToolbarButton
-            icon={<Claude />}
-            label={buttonLabel}
-            title="Model"
-            on={model !== null}
-          />
+          variant === "field" ? (
+            <FieldButton
+              icon={<Claude />}
+              label={buttonLabel}
+              aria-label={label ?? "Model"}
+              className={className}
+            />
+          ) : (
+            <ToolbarButton
+              icon={<Claude />}
+              label={buttonLabel}
+              title="Model"
+              on={model !== null}
+              className={className}
+            />
+          )
         }
       />
       <DropdownMenuContent
-        align="start"
-        side="top"
+        align={variant === "field" ? "end" : "start"}
+        side={variant === "field" ? "bottom" : "top"}
         className="w-72"
         onKeyDown={(event) => {
           const at = Number(event.key)
@@ -249,9 +313,9 @@ export function ModelMenu({
         >
           <Tick shown={model === null} />
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate text-xs font-normal">Inherit</span>
+            <span className="truncate text-xs font-normal">{none.label}</span>
             <span className="truncate text-[0.625rem] text-muted-foreground">
-              Use the model in your Claude Code settings
+              {none.description}
             </span>
           </div>
         </DropdownMenuItem>
@@ -269,6 +333,17 @@ export function ModelMenu({
           </div>
           {reloading ? "Reloading models…" : "Reload models"}
         </DropdownMenuItem>
+        {variant === "toolbar" && (
+          <DropdownMenuItem
+            onClick={() => openSettings("ai")}
+            className="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground"
+          >
+            <div className="flex size-4 shrink-0 items-center justify-center">
+              <Settings2 className="size-3.5" />
+            </div>
+            Model settings…
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )

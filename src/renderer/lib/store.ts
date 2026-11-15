@@ -1,8 +1,10 @@
 import { create } from "zustand"
 
 import {
+  DEFAULT_AI_SETTINGS,
   DEFAULT_CHAT_EFFORT,
   type AccessMode,
+  type AiSettings,
   type AgentStatus,
   type Chat,
   type ChatImage,
@@ -52,7 +54,7 @@ export type Tab =
   | { id: string; kind: "dashboard"; connectionId: string; dashboardId: string }
   | { id: string; kind: "knowledge"; connectionId: string }
 
-export type SettingsSection = "skills" | "tools" | "permissions" | "audit"
+export type SettingsSection = "ai" | "skills" | "tools" | "permissions" | "audit"
 
 export type ConnectionDialog =
   { mode: "new" } | { mode: "edit"; connection: Connection } | null
@@ -88,6 +90,8 @@ type State = {
   /** A row's `value` from the CLI's list, or null to inherit its settings. */
   model: string | null
   effort: ChatEffort | null
+  /** Settings › Models & language, as the main process keeps them. */
+  ai: AiSettings
 
   init(): Promise<void>
   /** What `init` runs, once. */
@@ -125,6 +129,8 @@ type State = {
   deleteChat(chatId: string): Promise<void>
   send(text: string, images?: ChatImage[]): Promise<void>
   setModel(model: string | null, effort: ChatEffort | null): void
+  /** Saved; a new default for the chat moves the chat's picker to it too. */
+  setAiSettings(settings: AiSettings): Promise<void>
   setDraft(draft: string | null): void
 
   loadKnowledge(connectionId: string): Promise<Knowledge>
@@ -288,6 +294,7 @@ export const useStore = create<State>((set, get) => {
     // whatever somebody set for their terminal.
     model: "default",
     effort: DEFAULT_CHAT_EFFORT,
+    ai: DEFAULT_AI_SETTINGS,
 
     init() {
       started ??= get().start()
@@ -296,15 +303,20 @@ export const useStore = create<State>((set, get) => {
 
     async start() {
       api().onChatEvent(onChatEvent)
-      const [connections, chats, chat, agent, dashboards] = await Promise.all([
+      const [connections, chats, chat, agent, dashboards, ai] = await Promise.all([
         api().listConnections(),
         api().listChats(),
         api().createChat(),
         api().agentStatus(),
         api().listDashboards(),
+        api().getAiSettings(),
       ])
       set({
         ready: true,
+        ai,
+        // The chat starts on the model and effort set in Settings.
+        model: ai.models.chat.model,
+        effort: ai.models.chat.effort,
         connections,
         chats,
         chat,
@@ -582,6 +594,18 @@ export const useStore = create<State>((set, get) => {
     },
 
     setModel: (model, effort) => set({ model, effort }),
+
+    async setAiSettings(settings) {
+      const before = get().ai.models.chat
+      const ai = await api().setAiSettings(settings)
+      const chat = ai.models.chat
+      set({
+        ai,
+        ...(chat.model !== before.model || chat.effort !== before.effort
+          ? { model: chat.model, effort: chat.effort }
+          : {}),
+      })
+    },
     setDraft: (draft) => set({ draft }),
 
     async loadKnowledge(connectionId) {

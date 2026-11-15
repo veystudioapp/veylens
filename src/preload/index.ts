@@ -53,6 +53,8 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.setDisplayColumn, connectionId, ref, column),
   getToolModes: () => ipcRenderer.invoke(IPC.getToolModes),
   setToolMode: (tool, mode) => ipcRenderer.invoke(IPC.setToolMode, tool, mode),
+  getAiSettings: () => ipcRenderer.invoke(IPC.getAiSettings),
+  setAiSettings: (settings) => ipcRenderer.invoke(IPC.setAiSettings, settings),
 
   assistSql: (input) => ipcRenderer.invoke(IPC.assistSql, input),
   cancelAssist: (requestId) => ipcRenderer.invoke(IPC.cancelAssist, requestId),

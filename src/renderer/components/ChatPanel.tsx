@@ -73,6 +73,7 @@ import { Markdown } from "./Markdown"
 import { MentionField, MentionText, type MentionFieldHandle } from "./mention-field"
 import { ModelMenu } from "./model-menu"
 import { ErrorNote } from "./state-view"
+import { SqlText } from "./sql-code"
 
 type ToolItem = Extract<ChatItem, { kind: "tool" }>
 type ChartItem = Extract<ChatItem, { kind: "chart" }>
@@ -224,7 +225,7 @@ function toolLabel(item: ToolItem, preview: Preview | null): string {
 function Sql({ text }: { text: string }) {
   return (
     <pre className="selectable overflow-x-auto rounded-md border bg-muted px-2.5 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap">
-      {text}
+      <SqlText text={text} />
     </pre>
   )
 }
@@ -623,7 +624,7 @@ function WritingRow({ item }: { item: ToolItem }) {
           ref={box}
           className="selectable max-h-48 overflow-auto rounded-md border bg-muted px-2.5 py-2 font-mono text-xs whitespace-pre-wrap text-muted-foreground"
         >
-          {sql}
+          <SqlText text={sql} />
           <span className="writing-caret" aria-hidden />
         </pre>
       )}

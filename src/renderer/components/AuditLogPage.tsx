@@ -34,6 +34,7 @@ import { confirm } from "./confirm"
 import { IconButton } from "./icon-button"
 import { SimpleSelect } from "./simple-select"
 import { ErrorNote } from "./state-view"
+import { SqlText } from "./sql-code"
 
 const ACTION_LOOK: Record<AuditAction, { label: string; icon: LucideIcon; tone: Tone }> = {
   query: { label: "Query", icon: Play, tone: "blue" },
@@ -383,7 +384,7 @@ export function AuditLogPage() {
                         {entry.sql && (
                           <div className="relative">
                             <pre className="max-h-64 overflow-auto rounded-md border bg-background p-2.5 font-mono text-[11px] leading-5 whitespace-pre-wrap">
-                              {entry.sql}
+                              <SqlText text={entry.sql} />
                             </pre>
                           </div>
                         )}

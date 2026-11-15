@@ -41,6 +41,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
+import { SqlText, SqlTextarea } from "../sql-code"
 import { errorMessage, useStore } from "@/lib/store"
 import { IconTile } from "@/lib/tones"
 import { cn } from "@/lib/utils"
@@ -599,8 +600,8 @@ export function FilterDialog({
                       : "A query whose first column lists them; run when the dashboard opens."
                   }
                 >
-                  <div className="overflow-hidden rounded-lg border focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30">
-                    <textarea
+                  <div className="relative overflow-hidden rounded-lg border focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30">
+                    <SqlTextarea
                       aria-label="Choices query"
                       value={(entry.filter as Extract<DashboardFilter, { kind: "select" | "multi_select" }>).optionsSql}
                       spellCheck={false}
@@ -753,7 +754,7 @@ export function FilterDialog({
                     }
                   >
                     <div className="relative rounded-lg border bg-muted/30">
-                      <pre className="overflow-x-auto px-3 py-2.5 pr-10 font-mono text-xs leading-5">{snippet}</pre>
+                      <pre className="overflow-x-auto px-3 py-2.5 pr-10 font-mono text-xs leading-5"><SqlText text={snippet} /></pre>
                       <span className="absolute top-1.5 right-1.5">
                         <CopyButton text={snippet} />
                       </span>

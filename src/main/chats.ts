@@ -154,7 +154,7 @@ Changing things:
 - When the two of you settle how a figure is computed, offer to save it with save_metric. When you learn something about the data that will matter again — what a status code means, which table is authoritative — offer to keep it with append_note. The user may be asked to approve either first.
 
 How to answer:
-- Lead with the answer, in the language the user wrote in. Keep it short.
+- Lead with the answer, in the language the user wrote in — or, when the <viewer> block names an answer language, in that one. Keep it short.
 - Show the SQL only when it helps or when asked — the user can already expand each tool call to see it.
 - Never ask for or repeat passwords or connection credentials.`
 
@@ -249,7 +249,7 @@ type Live = {
   stderr: string
 }
 
-function describeContext(
+export function describeContext(
   context: ViewerContext,
   connections: Connections,
   library: Library
@@ -276,6 +276,15 @@ function describeContext(
     lines.push(
       `business context: ${knowledge.notes.trim() ? "notes written" : "no notes"}, ${metrics} ${metrics === 1 ? "metric" : "metrics"} defined`
     )
+  }
+  const ai = library.aiSettings()
+  if (ai.language) {
+    lines.push(
+      `answer language (set in Settings): ${ai.language} — write every answer in it, whatever language the message is in; SQL, names and values stay as they are`
+    )
+  }
+  if (ai.keywordCase !== "keep") {
+    lines.push(`SQL style (set in Settings): keywords in ${ai.keywordCase === "upper" ? "UPPER" : "lower"} case`)
   }
   const off = TOOL_CATALOG.filter((item) => library.toolMode(item.name) === "off")
   if (off.length) {

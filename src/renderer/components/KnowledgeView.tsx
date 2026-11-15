@@ -28,6 +28,7 @@ import { confirm } from "./confirm"
 import { IconButton } from "./icon-button"
 import { Markdown } from "./Markdown"
 import { ErrorNote, Loading } from "./state-view"
+import { SqlText, SqlTextarea } from "./sql-code"
 
 type KnowledgeTab = Extract<Tab, { kind: "knowledge" }>
 
@@ -171,7 +172,7 @@ function MetricCard({
           )}
           {!open && (
             <code className="mt-1.5 block truncate font-mono text-[11px] text-muted-foreground/90">
-              {firstLine || <span className="italic">No SQL yet</span>}
+              {firstLine ? <SqlText text={firstLine} /> : <span className="italic">No SQL yet</span>}
             </code>
           )}
         </div>
@@ -215,8 +216,8 @@ function MetricCard({
           </div>
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium">How it is computed</span>
-            <div className="overflow-hidden rounded-lg border focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30">
-              <textarea
+            <div className="relative overflow-hidden rounded-lg border focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30">
+              <SqlTextarea
                 value={metric.sql}
                 onChange={(event) => onChange({ sql: event.target.value })}
                 onKeyDown={(event) => {

@@ -204,6 +204,8 @@ export function registerIpc({
     setDisplayColumn: async (connectionId, ref, column) =>
       library.setDisplayColumn(connectionId, ref, column),
     getToolModes: async () => library.toolModes(),
+    getAiSettings: async () => library.aiSettings(),
+    setAiSettings: async (settings) => library.setAiSettings(settings),
     setToolMode: async (tool, mode) => {
       const modes = library.setToolMode(tool, mode)
       audit.record({

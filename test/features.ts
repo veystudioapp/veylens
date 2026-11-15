@@ -21,9 +21,9 @@ import {
   numberOrNull,
   quoteLiteral,
 } from "../src/shared/params"
-import { readAnswer } from "../src/main/assist"
+import { assistPrompt, readAnswer } from "../src/main/assist"
 import { AUDIT_KEEP, AuditLog, describeChanges, refusal } from "../src/main/audit"
-import { Chats, plainPreview } from "../src/main/chats"
+import { Chats, describeContext, plainPreview } from "../src/main/chats"
 import {
   APPROVAL_TOOLS,
   dbToolDefinitions,
@@ -44,7 +44,7 @@ import {
   visibleTree,
 } from "../src/shared/permissions"
 import { PostgresDriver } from "../src/main/db/postgres"
-import { checkFieldDisplay, Library } from "../src/main/library"
+import { checkAiSettings, checkFieldDisplay, Library } from "../src/main/library"
 import { TOOL_CATALOG } from "../src/shared/agent"
 import {
   cssColour,
@@ -61,6 +61,8 @@ import {
 } from "../src/renderer/lib/cell-format"
 import { applyUserChanges, runUserQuery } from "../src/main/user-queries"
 import { openSamplePostgres } from "./sample-postgres"
+import { caretAt, commentEdit, indentEdit, type TextEdit } from "../src/renderer/lib/sql-editing"
+import { sqlTokens } from "../src/renderer/lib/sql-tokens"
 
 const sample = await openSamplePostgres()
 const driver = new PostgresDriver(
@@ -1545,6 +1547,109 @@ await check("mentions: @ finds tables, dashboards, metrics and connections, and 
   library.deleteDashboard(board.id)
   library.saveKnowledge(shop.id, { notes: "", metrics: [], updatedAt: 0 })
 })
+await check("sql colours: every character kept, each piece by what it is", () => {
+  const sql = `-- revenue
+SELECT o.id, count(*)::bigint AS "from", 'it''s' || $$x$$, 1.5e3
+  FROM public.orders o /* the lot */
+ WHERE o.status = $1 [[AND o.day >= {{date_start}}]] AND o.select IS NOT NULL`
+  const tokens = sqlTokens(sql)
+  assert.equal(tokens.map((token) => token.text).join(""), sql)
+  const kind = (text: string) => tokens.find((token) => token.text === text)?.kind
+  assert.equal(kind("-- revenue"), "comment")
+  assert.equal(kind("/* the lot */"), "comment")
+  assert.equal(kind("SELECT"), "keyword")
+  assert.equal(kind("count"), "function")
+  assert.equal(kind("bigint"), "type")
+  assert.equal(kind('"from"'), "identifier")
+  assert.equal(kind("'it''s'"), "string")
+  assert.equal(kind("$$x$$"), "string")
+  assert.equal(kind("1.5e3"), "number")
+  assert.equal(kind("$1"), "param")
+  assert.equal(kind("[["), "param")
+  assert.equal(kind("{{date_start}}"), "param")
+  // A column that is spelt like a keyword is a name after a dot.
+  assert.ok(!tokens.some((token) => token.text === "select"))
+  // Unclosed, it runs to the end rather than being lost.
+  assert.equal(sqlTokens("SELECT 'abc").at(-1)?.kind, "string")
+})
+
+await check("sql editing: indent, outdent and comment, the selection kept on the same text", () => {
+  const apply = (text: string, edit: TextEdit | null) =>
+    edit ? text.slice(0, edit.from) + edit.insert + text.slice(edit.to) : text
+  const sql = "SELECT a\n  FROM t\nWHERE x = 1"
+  // A caret: two spaces where it is.
+  const tab = indentEdit(sql, 3, 3, false)!
+  assert.equal(apply(sql, tab), "SEL  ECT a\n  FROM t\nWHERE x = 1")
+  assert.deepEqual([tab.selectStart, tab.selectEnd], [5, 5])
+  // A selection over two lines: both indented, the same letters selected.
+  const both = indentEdit(sql, 7, 13, false)!
+  const indented = apply(sql, both)
+  assert.equal(indented, "  SELECT a\n    FROM t\nWHERE x = 1")
+  // Each end moved with its own line's letters.
+  assert.deepEqual([both.selectStart, both.selectEnd], [9, 17])
+  assert.equal(indented.slice(both.selectStart, both.selectEnd), "a\n    FR")
+  // A selection ending at a line's start leaves that line alone.
+  assert.equal(apply(sql, indentEdit(sql, 0, 9, false)), "  SELECT a\n  FROM t\nWHERE x = 1")
+  // Outdent takes what is there, up to two spaces.
+  assert.equal(apply(sql, indentEdit(sql, 0, sql.length, true)), "SELECT a\nFROM t\nWHERE x = 1")
+  assert.equal(indentEdit("SELECT 1", 0, 0, true), null)
+  // Comment: at the lines' common margin; again, back as they were.
+  const commented = apply(sql, commentEdit(sql, 9, 12))
+  assert.equal(commented, "SELECT a\n  -- FROM t\nWHERE x = 1")
+  assert.equal(apply(commented, commentEdit(commented, 12, 12)), sql)
+  const all = apply(sql, commentEdit(sql, 0, sql.length))
+  assert.equal(all, "-- SELECT a\n--   FROM t\n-- WHERE x = 1")
+  assert.equal(apply(all, commentEdit(all, 0, all.length)), sql)
+  assert.deepEqual(caretAt(sql, 0), { line: 1, column: 1 })
+  assert.deepEqual(caretAt(sql, 13), { line: 2, column: 5 })
+  assert.deepEqual(caretAt(sql, sql.length), { line: 3, column: 12 })
+})
+
+await check("ai settings: kept, made sound, and told to the chat and the SQL helper", () => {
+  const base = library.aiSettings()
+  assert.equal(base.language, null)
+  assert.equal(base.models.chat.model, "default")
+  // Nonsense is the default, not a refusal; following the chat drops an effort.
+  const sound = checkAiSettings({
+    language: "  Vietnamese ",
+    models: {
+      chat: { model: "", effort: "extreme" },
+      generate: { model: "opus", effort: "high" },
+      explain: { model: null, effort: "low" },
+    },
+    keywordCase: "shouting",
+    sqlInstructions: "x".repeat(5000),
+  })
+  assert.equal(sound.language, "Vietnamese")
+  assert.deepEqual(sound.models.chat, { model: "default", effort: null })
+  assert.deepEqual(sound.models.generate, { model: "opus", effort: "high" })
+  assert.deepEqual(sound.models.explain, { model: null, effort: null })
+  assert.deepEqual(sound.models.fix, { model: null, effort: null })
+  assert.equal(sound.keywordCase, "keep")
+  assert.equal(sound.sqlInstructions.length, 4000)
+
+  const saved = library.setAiSettings({
+    ...base,
+    language: "Japanese",
+    keywordCase: "upper",
+    sqlInstructions: "Always add LIMIT 100.",
+  })
+  assert.deepEqual(new Library(dir, () => {}).aiSettings(), saved)
+
+  const prompt = assistPrompt(saved)
+  assert.match(prompt, /in Japanese, whatever language the request is in/)
+  assert.match(prompt, /UPPER CASE/)
+  assert.match(prompt, /Always add LIMIT 100\./)
+  assert.match(assistPrompt(base), /the language of the request/)
+  assert.doesNotMatch(assistPrompt(base), /UPPER CASE|own instructions/)
+
+  const viewer = describeContext({ connectionId: shop.id, tab: null } as never, connections, library)
+  assert.match(viewer, /answer language \(set in Settings\): Japanese/)
+  assert.match(viewer, /keywords in UPPER case/)
+  library.setAiSettings(base)
+  assert.doesNotMatch(describeContext({ connectionId: shop.id, tab: null } as never, connections, library), /answer language/)
+})
+
 await check("chat images: [Image #n] tags, kept as files, sent as image blocks", async () => {
   const ci = await import("../src/shared/chat-images")
   const { Inbox } = await import("../src/main/chats")

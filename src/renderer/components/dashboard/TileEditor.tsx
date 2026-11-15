@@ -24,6 +24,7 @@ import { Chart, ResultTable } from "../Chart"
 import { ChartControls } from "../chart-controls"
 import { Markdown } from "../Markdown"
 import { ErrorNote } from "../state-view"
+import { SqlTextarea } from "../sql-code"
 
 const WIDTHS: { value: TileWidth; label: string }[] = [
   { value: 1, label: "¼" },
@@ -259,7 +260,7 @@ export function TileEditor({
         <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_272px]">
           <div className="flex min-h-0 flex-col">
             {/* Editor */}
-            <div className="flex shrink-0 flex-col border-b">
+            <div className="relative flex shrink-0 flex-col border-b">
               <div className="flex h-9 items-center gap-1.5 border-b px-3">
                 <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
                   {text ? "Markdown" : "SQL"}
@@ -304,7 +305,7 @@ export function TileEditor({
                   className="h-44 resize-none bg-muted/30 px-4 py-3 font-mono text-xs leading-5 outline-none"
                 />
               ) : (
-                <textarea
+                <SqlTextarea
                   ref={editor}
                   aria-label="Tile SQL"
                   value={draft.sql}
@@ -462,7 +463,8 @@ export function TileEditor({
                     </>
                   }
                 >
-                  <textarea
+                  <div className="relative flex flex-col">
+                  <SqlTextarea
                     aria-label="Drill-down SQL"
                     value={draft.drillSql ?? ""}
                     spellCheck={false}
@@ -470,6 +472,7 @@ export function TileEditor({
                     placeholder="SELECT * FROM orders WHERE status = {{value}} LIMIT 500"
                     className="min-h-24 resize-y rounded-md border bg-muted/30 px-2.5 py-2 font-mono text-[11px] leading-4 outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
                   />
+                  </div>
                 </Section>
               </>
             )}

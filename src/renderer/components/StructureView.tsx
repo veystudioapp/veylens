@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils"
 import { ColumnKindIcon } from "./DataGrid"
 import { IconButton } from "./icon-button"
 import { ErrorNote } from "./state-view"
+import { SqlText } from "./sql-code"
 
 /** 1.2 MB, 340 kB, 8 kB: a size as people say it. */
 export function formatBytes(bytes: number | null): string | null {
@@ -557,7 +558,7 @@ export function StructureView({
             <Pending />
           ) : (
             <pre className="max-h-[28rem] overflow-auto bg-muted/30 p-4 font-mono text-[11px] leading-5 whitespace-pre">
-              {details.ddl}
+              <SqlText text={details.ddl} />
             </pre>
           )}
         </Section>

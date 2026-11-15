@@ -3,6 +3,14 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
 import {
+  AI_TASKS,
+  CHAT_EFFORTS,
+  DEFAULT_AI_SETTINGS,
+  SQL_INSTRUCTIONS_MAX,
+  SQL_KEYWORD_CASES,
+  type AiModelChoice,
+  type AiSettings,
+  type ChatEffort,
   DATE_PRESETS,
   TEXT_MATCHES,
   isTextTile,
@@ -51,6 +59,8 @@ type Stored = {
   skills: StoredSkill[]
   skillOverrides: Record<string, SkillOverride>
   toolModes: ToolModes
+  /** Written before there were AI settings: none, the defaults. */
+  ai?: AiSettings
   /** Connection → `["schema","table"]` as JSON → the table's field settings. */
   tableFields: Record<string, Record<string, TableFields>>
 }
@@ -259,6 +269,48 @@ function migrateFields(parsed: Record<string, unknown>): Record<string, Record<s
  * Both the renderer and the agent's tools change it, so every change is
  * announced: a dashboard the agent adds a tile to redraws where it is open.
  */
+/** One task's model and effort, as saved: a name of reasonable length, an
+ * effort the CLI knows. */
+function checkChoice(choice: unknown, chat: boolean): AiModelChoice {
+  const given = (choice ?? {}) as Partial<AiModelChoice>
+  // Null: the chat inherits the CLI's own model; a task follows the chat.
+  const model =
+    typeof given.model === "string" && given.model.trim() && given.model.length <= 200
+      ? given.model.trim()
+      : chat && given.model !== null
+        ? DEFAULT_AI_SETTINGS.models.chat.model
+        : null
+  const effort = CHAT_EFFORTS.includes(given.effort as ChatEffort)
+    ? (given.effort as ChatEffort)
+    : null
+  // Following the chat, the chat's effort comes with it.
+  return { model, effort: model === null ? null : effort }
+}
+
+/** AI settings as given, made sound: whatever is missing or wrong is the
+ * default rather than a refusal — they are preferences, not data. */
+export function checkAiSettings(settings: unknown): AiSettings {
+  const given = (settings ?? {}) as Partial<AiSettings>
+  const language =
+    typeof given.language === "string" && given.language.trim() && given.language.length <= 60
+      ? given.language.trim()
+      : null
+  const models = Object.fromEntries(
+    AI_TASKS.map((task) => [task, checkChoice(given.models?.[task], task === "chat")])
+  ) as AiSettings["models"]
+  return {
+    language,
+    models,
+    keywordCase: SQL_KEYWORD_CASES.includes(given.keywordCase as never)
+      ? given.keywordCase!
+      : "keep",
+    sqlInstructions:
+      typeof given.sqlInstructions === "string"
+        ? given.sqlInstructions.slice(0, SQL_INSTRUCTIONS_MAX)
+        : "",
+  }
+}
+
 export class Library {
   private data: Stored = {
     knowledge: {},
@@ -289,6 +341,7 @@ export class Library {
         skills: parsed.skills ?? [],
         skillOverrides: parsed.skillOverrides ?? {},
         toolModes: parsed.toolModes ?? {},
+        ...(parsed.ai ? { ai: checkAiSettings(parsed.ai) } : {}),
         tableFields: migrateFields(parsed),
       }
     } catch {
@@ -548,6 +601,18 @@ export class Library {
     this.data.toolModes = next
     this.persist()
     return next
+  }
+
+  // ── AI settings ──────────────────────────────────────────────────────────
+
+  aiSettings(): AiSettings {
+    return this.data.ai ?? DEFAULT_AI_SETTINGS
+  }
+
+  setAiSettings(settings: AiSettings): AiSettings {
+    this.data.ai = checkAiSettings(settings)
+    this.persist()
+    return this.data.ai
   }
 
   // ── Dashboards ───────────────────────────────────────────────────────────
