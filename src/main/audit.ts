@@ -6,7 +6,7 @@ import type { AuditEntry, ChangeSet, ChatEvent } from "../shared/api"
 
 /** A failure the app's own rules caused, rather than the database. */
 export const refusal = (message: string) =>
-  /Refused by the permissions|is read-only in Vey Data|turned \S+ off in Settings/i.test(message)
+  /Refused by the permissions|is read-only in Vey Lens|turned \S+ off in Settings/i.test(message)
 
 /** "2 updated, 1 added, 1 deleted in public.orders" */
 export function describeChanges(changes: ChangeSet): string {

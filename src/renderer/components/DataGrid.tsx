@@ -249,7 +249,7 @@ const MAX_WIDTH = 1200
 const GUTTER = 60
 const clampWidth = (width: number) => Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width)))
 
-const widthsKey = (key: string) => `veydata:column-widths:${key}`
+const widthsKey = (key: string) => `veylens:column-widths:${key}`
 
 function storedWidths(key: string | undefined): Record<string, number> {
   if (!key || typeof localStorage === "undefined") return {}

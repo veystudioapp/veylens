@@ -1,6 +1,6 @@
 {
-  "name": "veydata",
-  "productName": "Vey Data",
+  "name": "veylens",
+  "productName": "Vey Lens",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -67,8 +67,8 @@
     "electron"
   ],
   "build": {
-    "appId": "vn.app.veydata",
-    "productName": "Vey Data",
+    "appId": "vn.app.veylens",
+    "productName": "Vey Lens",
     "files": [
       "dist-electron/**/*",
       "dist-renderer/**/*"
@@ -79,9 +79,27 @@
     },
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "resources/icon.png",
       "target": [
-        "dmg"
-      ]
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Vey-Lens-${version}-${arch}.${ext}",
+      "hardenedRuntime": true
+    },
+    "win": {
+      "target": "nsis",
+      "artifactName": "Vey-Lens-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Development",
+      "artifactName": "Vey-Lens-${version}-${arch}.${ext}"
     }
   }
 }

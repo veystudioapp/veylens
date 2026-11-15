@@ -16,7 +16,7 @@ import type { ChatEvent } from "../src/shared/api"
 import { openSamplePostgres } from "./sample-postgres"
 
 const sample = await openSamplePostgres()
-const dataDir = mkdtempSync(path.join(tmpdir(), "veydata-agent-"))
+const dataDir = mkdtempSync(path.join(tmpdir(), "veylens-agent-"))
 const connections = new Connections(
   path.join(dataDir, "connections.json"),
   { encrypt: () => null, decrypt: () => null },

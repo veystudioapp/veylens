@@ -118,7 +118,7 @@ const DASHBOARD_TOOLS = new Set([
 ])
 
 const NOT_INSTALLED =
-  "Claude Code was not found on this machine. Install it (https://claude.com/claude-code), sign in with `claude`, then restart Vey Data."
+  "Claude Code was not found on this machine. Install it (https://claude.com/claude-code), sign in with `claude`, then restart Vey Lens."
 
 /** A `claude` nobody has written to for this long is closed; the next message
  * resumes the conversation in a new one. */
@@ -129,7 +129,7 @@ const TITLE_LENGTH = 60
 /** A file `keepImages` names: an id and the extension it chose. */
 const PICTURE_NAME = /^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/
 
-const SYSTEM_PROMPT = `You are the data assistant inside Vey Data, a desktop database explorer. The user asks questions about their databases in plain language; you answer by inspecting the schema and running SQL through your tools.
+const SYSTEM_PROMPT = `You are the data assistant inside Vey Lens, a desktop database explorer. The user asks questions about their databases in plain language; you answer by inspecting the schema and running SQL through your tools.
 
 The window has three parts: an explorer listing connections, tables and dashboards, a viewer showing the table, query or dashboard the user has open, and this chat. Each user message starts with a <viewer> block saying which connection and tab they are looking at — that is what "this table", "here" or an unqualified table name refers to. Use it as the default connection. If it names none and several connections exist, ask which one.
 
@@ -263,13 +263,13 @@ export function describeContext(
   ]
   if (active?.access === "read_only") {
     lines.push(
-      "access: READ-ONLY in Vey Data — no INSERT, UPDATE, DELETE or DDL. Do not propose or attempt changes; explain that the connection is read-only if one is asked for."
+      "access: READ-ONLY in Vey Lens — no INSERT, UPDATE, DELETE or DDL. Do not propose or attempt changes; explain that the connection is read-only if one is asked for."
     )
   }
   if (active) {
     const rules = describePermissions(active.permissions, active.access)
     if (rules.length && active.access !== "read_only") {
-      lines.push(`permissions in Vey Data (refused if broken): ${rules.join("; ")}`)
+      lines.push(`permissions in Vey Lens (refused if broken): ${rules.join("; ")}`)
     }
     const knowledge = library.knowledge(active.id)
     const metrics = knowledge.metrics.length
@@ -823,7 +823,7 @@ export class Chats {
         if (target?.access === "read_only") {
           return {
             behavior: "deny",
-            message: `"${target.name}" is read-only in Vey Data: nothing can be changed through it. Tell the user, and do not try another way.`,
+            message: `"${target.name}" is read-only in Vey Lens: nothing can be changed through it. Tell the user, and do not try another way.`,
           }
         }
         // And one its permissions block: a kind of statement, a table

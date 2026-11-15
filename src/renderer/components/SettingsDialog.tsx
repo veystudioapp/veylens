@@ -293,7 +293,7 @@ function SkillsPage() {
   const [view, setView] = useState<"write" | "preview">("write")
 
   useEffect(() => {
-    void window.veydata.listSkills().then(
+    void window.veylens.listSkills().then(
       (list) => {
         setSkills(list)
         if (list[0]) {
@@ -359,7 +359,7 @@ function SkillsPage() {
   const save = async () => {
     setSaving(true)
     await attempt(async () => {
-      const skill = await window.veydata.saveSkill(form)
+      const skill = await window.veylens.saveSkill(form)
       store(skill)
       show(skill)
     })
@@ -369,7 +369,7 @@ function SkillsPage() {
   const reset = () =>
     attempt(async () => {
       if (!current) return
-      const skill = await window.veydata.resetSkill(current.id)
+      const skill = await window.veylens.resetSkill(current.id)
       store(skill)
       show(skill)
     })
@@ -384,7 +384,7 @@ function SkillsPage() {
     })
     if (!ok) return
     await attempt(async () => {
-      await window.veydata.deleteSkill(current.id)
+      await window.veylens.deleteSkill(current.id)
       const rest = (skills ?? []).filter((item) => item.id !== current.id)
       setSkills(rest)
       show(rest[0])
@@ -670,7 +670,7 @@ function ToolsPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    void window.veydata
+    void window.veylens
       .getToolModes()
       .then(setModes, (failure) => setError(errorMessage(failure)))
   }, [])
@@ -678,7 +678,7 @@ function ToolsPage() {
   const change = async (tool: string, mode: ToolMode) => {
     setError(null)
     try {
-      setModes(await window.veydata.setToolMode(tool, mode))
+      setModes(await window.veylens.setToolMode(tool, mode))
     } catch (failure) {
       setError(errorMessage(failure))
     }
@@ -873,7 +873,7 @@ function ObjectRules({
   const [table, setTable] = useState(ALL_TABLES)
 
   useEffect(() => {
-    void window.veydata.listObjects(connection.id).then(
+    void window.veylens.listObjects(connection.id).then(
       (found) => {
         setTree(found)
         setSchema((current) => current || found[0]?.name || "")
@@ -1177,7 +1177,7 @@ function PermissionsPage({ onTools }: { onTools: () => void }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <PageHeader title="Permissions">
-        What can be done through each connection in Vey Data, by you and by the
+        What can be done through each connection in Vey Lens, by you and by the
         assistant alike: its access, then — opened — each kind of statement,
         schemas and tables, and guards. Read off the SQL by this app, on top of
         the database user's own grants, which remain the hard boundary.

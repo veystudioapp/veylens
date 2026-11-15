@@ -80,7 +80,7 @@ const sent = new Map<string, Promise<string | null>>()
 export function sentImage(name: string): Promise<string | null> {
   let url = sent.get(name)
   if (!url) {
-    url = window.veydata.chatImage(name).catch(() => null)
+    url = window.veylens.chatImage(name).catch(() => null)
     sent.set(name, url)
   }
   return url

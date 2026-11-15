@@ -275,7 +275,7 @@ export function ConnectionDialog({
   const test = async () => {
     setProbe({ state: "running" })
     try {
-      const version = await window.veydata.testConnection(
+      const version = await window.veylens.testConnection(
         existing?.id ?? null,
         input()
       )
@@ -582,7 +582,7 @@ export function ConnectionDialog({
 
           <fieldset className="flex flex-col gap-3">
             <legend className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-              In Vey Data
+              In Vey Lens
             </legend>
             <Field id="connection-name" label="Name">
               <Input
@@ -644,7 +644,7 @@ export function ConnectionDialog({
               <span className="min-w-0 flex-1">
                 <span className="font-medium">{ACCESS_LABEL[access]}</span>
                 <span className="text-muted-foreground">
-                  {existing ? " in Vey Data." : " when added."} Permissions are set in Settings.
+                  {existing ? " in Vey Lens." : " when added."} Permissions are set in Settings.
                 </span>
               </span>
               {existing && (

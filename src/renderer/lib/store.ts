@@ -145,7 +145,7 @@ type State = {
   pin(input: PinInput): Promise<Dashboard>
 }
 
-const api = () => window.veydata
+const api = () => window.veylens
 
 const message = (error: unknown) =>
   splitErrorOffset(

@@ -424,7 +424,7 @@ export function Explorer({
         <div
           className={cn(
             "drag-region h-full flex-1",
-            window.veydata.platform === "darwin" ? "min-w-[84px]" : "min-w-3"
+            window.veylens.platform === "darwin" ? "min-w-[84px]" : "min-w-3"
           )}
         />
         <IconButton

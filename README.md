@@ -1,4 +1,4 @@
-# Vey Data
+# Vey Lens
 
 A desktop database explorer you can talk to. Connect to PostgreSQL or MySQL,
 browse and edit tables like in any database client, and ask questions about
@@ -311,7 +311,7 @@ cannot take back DDL, which MySQL commits as it runs (it changes no rows).
 
 ```
 src/shared/api.ts      the IPC contract: types + channel names, nothing else
-src/preload/index.ts   the bridge (`window.veydata`)
+src/preload/index.ts   the bridge (`window.veylens`)
 src/main/
   main.ts              window, wiring
   ipc.ts               one handler per contract method
@@ -333,7 +333,7 @@ Adding a call across the bridge means touching `api.ts`, the preload and
 `ipc.ts` — the type on `DesktopApi` makes the compiler point at whichever one
 was missed.
 
-Data lives in Electron's `userData` directory (`VEYDATA_HOME` overrides it):
+Data lives in Electron's `userData` directory (`VEYLENS_HOME` overrides it):
 `connections.json`, `library.json` and `chats/`.
 
 `bun run test` runs the drivers and the analysis features (tools, plans, dry

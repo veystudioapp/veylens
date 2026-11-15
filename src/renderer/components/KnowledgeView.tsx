@@ -132,7 +132,7 @@ function MetricCard({
   const run = async () => {
     setTest({ state: "running" })
     try {
-      setTest({ state: "done", result: await window.veydata.runQuery(connectionId, metric.sql, true) })
+      setTest({ state: "done", result: await window.veylens.runQuery(connectionId, metric.sql, true) })
     } catch (failure) {
       setTest({ state: "failed", error: errorMessage(failure) })
     }

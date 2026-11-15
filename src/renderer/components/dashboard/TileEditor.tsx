@@ -143,7 +143,7 @@ export function TileEditor({
   const run = async (sql: string) => {
     setPreview({ state: "running" })
     try {
-      const result = await window.veydata.runQuery(connectionId, sql, true, params)
+      const result = await window.veylens.runQuery(connectionId, sql, true, params)
       setPreview({ state: "done", result })
       setRanSql(sql)
       setDraft((current) => {

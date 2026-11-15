@@ -235,7 +235,7 @@ export class Connections {
     const connection = this.find(id)
     if ((connection.access ?? "read_write") === "read_only") {
       throw new Error(
-        `"${connection.name}" is read-only in Vey Data, so nothing is written through it. Change its access in Settings › Permissions.`
+        `"${connection.name}" is read-only in Vey Lens, so nothing is written through it. Change its access in Settings › Permissions.`
       )
     }
   }

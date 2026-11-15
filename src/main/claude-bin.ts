@@ -14,7 +14,7 @@ import path from "node:path"
  */
 export type ClaudeBinary = { path: string; shellPath: string | null }
 
-const MARK = "__VEYDATA__"
+const MARK = "__VEYLENS__"
 
 function askShell(): Promise<{ binary: string; shellPath: string } | null> {
   if (process.platform === "win32") return Promise.resolve(null)
@@ -105,6 +105,6 @@ export function claudeEnvironment(
     env.PATH ?? "",
   ].filter(Boolean)
   env.PATH = paths.join(path.delimiter)
-  env.CLAUDE_AGENT_SDK_CLIENT_APP = "veydata/0.1.0"
+  env.CLAUDE_AGENT_SDK_CLIENT_APP = "veylens/0.1.0"
   return env
 }

@@ -590,7 +590,7 @@ export function FilterPopover({
 
 /** The columns a table has hidden, kept per table on this machine. */
 export function useHiddenColumns(key: string) {
-  const storage = `veydata:hidden-columns:${key}`
+  const storage = `veylens:hidden-columns:${key}`
   const read = () => {
     try {
       const raw = JSON.parse(localStorage.getItem(storage) ?? "[]")

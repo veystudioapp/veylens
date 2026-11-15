@@ -177,7 +177,7 @@ export function tagTone(value: string): Tone {
   return TAG_TONES[Math.abs(hash) % TAG_TONES.length]!
 }
 
-const STORAGE_KEY = "veydata.formatValues"
+const STORAGE_KEY = "veylens.formatValues"
 
 /** The toolbar's "Format values": on unless turned off, and remembered. */
 export const useFormatValues = create<{ on: boolean; toggle(): void }>((set, get) => ({
@@ -189,7 +189,7 @@ export const useFormatValues = create<{ on: boolean; toggle(): void }>((set, get
   },
 }))
 
-const HEIGHT_KEY = "veydata.rowHeight"
+const HEIGHT_KEY = "veylens.rowHeight"
 
 /** Comfortable rows, as NocoDB's, or compact ones to see more at once. */
 export const useRowHeight = create<{ compact: boolean; toggle(): void }>((set, get) => ({

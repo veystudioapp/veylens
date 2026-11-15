@@ -83,4 +83,4 @@ const api: DesktopApi = {
   },
 }
 
-contextBridge.exposeInMainWorld("veydata", api)
+contextBridge.exposeInMainWorld("veylens", api)

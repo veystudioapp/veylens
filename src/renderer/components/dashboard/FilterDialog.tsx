@@ -309,7 +309,7 @@ export function FilterDialog({
   const runChoices = async (key: string, sql: string) => {
     setChoices((current) => ({ ...current, [key]: { state: "running" } }))
     try {
-      const result = await window.veydata.runQuery(connectionId, sql, true)
+      const result = await window.veylens.runQuery(connectionId, sql, true)
       const options = result.rows
         .map((row) => row[0])
         .filter((value): value is string => value !== null && value !== undefined)

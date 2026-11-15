@@ -40,7 +40,7 @@ export function useAgentModels(): AgentModel[] {
     const listener = () => redraw((count) => count + 1)
     listeners.add(listener)
     if (!held && !asked) {
-      asked = window.veydata.agentModels()
+      asked = window.veylens.agentModels()
       asked.then(
         (answer) => {
           held = merge(answer)
@@ -65,7 +65,7 @@ export async function reloadAgentModels(): Promise<void> {
   reloading = true
   changed()
   try {
-    const answer = await window.veydata.agentModels(true)
+    const answer = await window.veylens.agentModels(true)
     if (answer.length > 0 || !held) held = merge(answer)
   } finally {
     reloading = false

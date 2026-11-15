@@ -147,7 +147,7 @@ export class PostgresDriver implements Driver {
       max: 4,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
-      application_name: "veydata",
+      application_name: "veylens",
       // A read-only connection is read-only to the server as well: every
       // transaction a session starts, explicit or not, refuses to write. Set
       // as the session starts, so no query of the app's runs before it. The

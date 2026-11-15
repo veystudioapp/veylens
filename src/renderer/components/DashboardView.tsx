@@ -289,7 +289,7 @@ function TileCard({
       state: "loading",
       previous: current.state === "done" ? current.result : null,
     }))
-    window.veydata
+    window.veylens
       .runQuery(connectionId, tile.sql, true, params)
       .then((result) => {
         if (id === request.current) setLoad({ state: "done", result })

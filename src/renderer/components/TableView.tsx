@@ -112,14 +112,14 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
     setLoading(true)
     const ref = { schema: tab.schema, table: tab.table }
     Promise.all([
-      window.veydata.getRows(tab.connectionId, {
+      window.veylens.getRows(tab.connectionId, {
         ...ref,
         filters,
         sort,
         limit,
         offset,
       }),
-      window.veydata.getTable(tab.connectionId, ref),
+      window.veylens.getTable(tab.connectionId, ref),
     ]).then(
       ([rows, table]) => {
         // An answer to a question that has since been replaced is dropped.
@@ -155,7 +155,7 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
   const readOnlyReason = !info
     ? null
     : access === "read_only"
-      ? "This connection is read-only in Vey Data, so rows cannot be edited."
+      ? "This connection is read-only in Vey Lens, so rows cannot be edited."
       : permissions &&
           objectAccess(permissions, { schema: tab.schema, table: tab.table }) !== "write"
         ? "This table is read-only in the connection's permissions (Settings › Permissions)."
@@ -208,7 +208,7 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
   const [settingsOf, setSettingsOf] = useState<string | null>(null)
   useEffect(() => {
     let live = true
-    void window.veydata
+    void window.veylens
       .getTableFields(tab.connectionId, { schema: tab.schema, table: tab.table })
       .then((found) => live && setFields(found), () => {})
     return () => {
@@ -357,7 +357,7 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
     setSaving(true)
     setSaveError(null)
     try {
-      await window.veydata.applyChanges(tab.connectionId, changes)
+      await window.veylens.applyChanges(tab.connectionId, changes)
       clearPending()
       setReload((value) => value + 1)
     } catch (failure) {
@@ -593,7 +593,7 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
           )}
           onSave={async (settings) =>
             setFields(
-              await window.veydata.setFieldSettings(
+              await window.veylens.setFieldSettings(
                 tab.connectionId,
                 { schema: tab.schema, table: tab.table },
                 settingsOf,

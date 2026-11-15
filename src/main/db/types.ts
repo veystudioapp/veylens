@@ -101,7 +101,7 @@ export const COUNT_TIMEOUT_MS = 5_000
 export function lockedOut(locked: boolean): void {
   if (locked) {
     throw new Error(
-      "This connection is read-only in Vey Data, so nothing is written through it."
+      "This connection is read-only in Vey Lens, so nothing is written through it."
     )
   }
 }

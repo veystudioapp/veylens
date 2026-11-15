@@ -53,7 +53,7 @@ export function tableCompletionSource({
           const key = keyOf(ref)
           let columns = cache.get(key)
           if (!columns) {
-            columns = window.veydata
+            columns = window.veylens
               .getTable(connectionId, ref)
               .then((info) => info.columns)
               .catch(() => [])

@@ -11,8 +11,8 @@ import { registerIpc } from "./ipc"
 import { Library } from "./library"
 
 // A data directory of its own for a run that must not touch the real one.
-if (process.env.VEYDATA_HOME) {
-  app.setPath("userData", path.resolve(process.env.VEYDATA_HOME))
+if (process.env.VEYLENS_HOME) {
+  app.setPath("userData", path.resolve(process.env.VEYLENS_HOME))
 }
 
 /** Passwords at rest go through the OS keychain where there is one. */
@@ -46,7 +46,7 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     show: false,
-    title: "Vey Data",
+    title: "Vey Lens",
     // The two `--background` values in `index.css`, so the first frame is
     // not a flash of the other theme.
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c21" : "#fdfdfe",

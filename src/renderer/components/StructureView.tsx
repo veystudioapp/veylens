@@ -198,7 +198,7 @@ export function StructureView({
     let live = true
     setDetails(null)
     setError(null)
-    window.veydata
+    window.veylens
       .getTableDetails(connectionId, { schema, table })
       .then(
         (found) => live && setDetails(found),

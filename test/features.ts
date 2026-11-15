@@ -79,7 +79,7 @@ const driver = new PostgresDriver(
   { stream: sample.stream }
 )
 
-const dir = mkdtempSync(path.join(tmpdir(), "veydata-features-"))
+const dir = mkdtempSync(path.join(tmpdir(), "veylens-features-"))
 const events: ChatEvent[] = []
 const library = new Library(dir, (event) => events.push(event))
 const connections = new Connections(
@@ -765,7 +765,7 @@ await check("structure: indexes, constraints, keys pointing in, size, comments a
 })
 
 await check("audit log: kept as lines, read back after a restart, trimmed, cleared", () => {
-  const where = mkdtempSync(path.join(tmpdir(), "veydata-audit-"))
+  const where = mkdtempSync(path.join(tmpdir(), "veylens-audit-"))
   const heard: ChatEvent[] = []
   const log = new AuditLog(where, (event) => heard.push(event))
   log.record({ actor: "you", action: "write", connectionId: "c1", connectionName: "Shop", summary: "Ran a statement", sql: "DELETE FROM t WHERE id = 1", status: "ok", rows: 1 })
@@ -795,7 +795,7 @@ await check("audit log: kept as lines, read back after a restart, trimmed, clear
 })
 
 await check("audit log: the assistant's calls are kept with how they ended", () => {
-  const where = mkdtempSync(path.join(tmpdir(), "veydata-audit-chat-"))
+  const where = mkdtempSync(path.join(tmpdir(), "veylens-audit-chat-"))
   const log = new AuditLog(where)
   const chats = new Chats(where, connections, library, () => {}, log)
   const keep = (item: Record<string, unknown>) =>
@@ -829,7 +829,7 @@ await check("chat: a tool call is on screen while its input is written, then who
   assert.deepEqual(readPartialJson('{"statements": ["A", "B'), { statements: ["A", "B"] })
   assert.deepEqual(readPartialJson('{"sql": "a \\u00'), { sql: "a " })
 
-  const where = mkdtempSync(path.join(tmpdir(), "veydata-writing-"))
+  const where = mkdtempSync(path.join(tmpdir(), "veylens-writing-"))
   const seen: ChatEvent[] = []
   const chats = new Chats(where, connections, library, (event) => seen.push(event))
   const chat = { id: "c-w", title: "", items: [] as ChatItemT[], sessionId: null, updatedAt: 0 }
@@ -918,17 +918,17 @@ await check("access: a read-only connection refuses every write from the UI", as
   try {
     await assert.rejects(
       runUserQuery(connections, shop.id, "DELETE FROM audit_log", false),
-      /"Shop" is read-only in Vey Data/
+      /"Shop" is read-only in Vey Lens/
     )
     await assert.rejects(
       runUserQuery(connections, shop.id, "/* sneaky */ set default_transaction_read_only = off", false),
-      /read-only in Vey Data/
+      /read-only in Vey Lens/
     )
     await assert.rejects(
       applyUserChanges(connections, shop.id, {
         schema: "public", table: "audit_log", updates: [], inserts: [{ message: "x" }], deletes: [],
       }),
-      /read-only in Vey Data/
+      /read-only in Vey Lens/
     )
     // A write hidden in a CTE starts like a read, and meets the read-only transaction.
     await assert.rejects(
@@ -960,10 +960,10 @@ await check("access: the assistant cannot write to a read-only connection", asyn
     grants.add(grantKey("execute_sql", args))
     const refused = await call("execute_sql", args)
     assert.equal(refused.isError, true)
-    assert.match(text(refused), /read-only in Vey Data/)
+    assert.match(text(refused), /read-only in Vey Lens/)
     const plan = { connection: "Shop", title: "x", statements: ["DELETE FROM audit_log"] }
     grants.add(grantKey("execute_plan", plan))
-    assert.match(text(await call("execute_plan", plan)), /read-only in Vey Data/)
+    assert.match(text(await call("execute_plan", plan)), /read-only in Vey Lens/)
     assert.equal(await count("select count(*) from audit_log"), 2)
     // Reads are untouched.
     assert.equal((await call("run_query", { connection: "Shop", sql: "select 1 as one" })).isError, undefined)
@@ -1349,7 +1349,7 @@ await check("field settings: checked, kept per table, migrated, and cleared", ()
 })
 
 await check("field settings: library.json from the earlier shape is migrated", () => {
-  const old = mkdtempSync(path.join(tmpdir(), "veydata-old-"))
+  const old = mkdtempSync(path.join(tmpdir(), "veylens-old-"))
   writeFileSync(
     path.join(old, "library.json"),
     JSON.stringify({ fieldDisplays: { c1: { '["public","t"]': { amount: { type: "number", decimals: null, thousands: true } } } } })
@@ -1444,17 +1444,17 @@ const lockedDriver = new PostgresDriver(
 await check("access: a read-only connection's driver refuses writes, and asks the server to", async () => {
   await assert.rejects(
     lockedDriver.query("CREATE TABLE server_lock (id int)", { readOnly: false, maxRows: 1 }),
-    /read-only in Vey Data/
+    /read-only in Vey Lens/
   )
   // A write that starts like a read meets a read-only transaction instead.
   await assert.rejects(
     lockedDriver.query("WITH gone AS (DELETE FROM audit_log RETURNING 1) SELECT 1", { readOnly: false, maxRows: 1 }),
     /read-only transaction/
   )
-  await assert.rejects(lockedDriver.runPlan(["DELETE FROM audit_log"]), /read-only in Vey Data/)
+  await assert.rejects(lockedDriver.runPlan(["DELETE FROM audit_log"]), /read-only in Vey Lens/)
   await assert.rejects(
     lockedDriver.apply({ schema: "public", table: "audit_log", updates: [], inserts: [{ message: "x" }], deletes: [] }),
-    /read-only in Vey Data/
+    /read-only in Vey Lens/
   )
   // And the session itself is asked to be read-only by the server. PGlite
   // ignores startup parameters, so here it is the request that is checked.
@@ -1765,7 +1765,7 @@ await check("chat images: [Image #n] tags, kept as files, sent as image blocks",
 
   // Through `send`, with the session stubbed: the line keeps file names, the
   // files hold the bytes, and deleting the chat takes them too.
-  const where = mkdtempSync(path.join(tmpdir(), "veydata-images-"))
+  const where = mkdtempSync(path.join(tmpdir(), "veylens-images-"))
   const chats = new Chats(where, connections, library, () => {})
   const pushed: { text: string; images: unknown[] }[] = []
   ;(chats as unknown as { open: () => Promise<unknown> }).open = async () => ({

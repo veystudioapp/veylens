@@ -598,7 +598,7 @@ export function Viewer({
 }) {
   const tabs = useStore((state) => state.tabs)
   const activeTabId = useStore((state) => state.activeTabId)
-  const mac = window.veydata.platform === "darwin"
+  const mac = window.veylens.platform === "darwin"
 
   return (
     <div className="flex h-full flex-col">

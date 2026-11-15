@@ -448,7 +448,7 @@ function Approval({ item, chatId }: { item: ToolItem; chatId: string }) {
   const connection = findConnection(connections, item.input.connection)
   const copy = APPROVAL_COPY[item.tool] ?? APPROVAL_COPY.execute_sql!
   const answer = (allow: boolean) =>
-    void window.veydata.answerApproval(chatId, item.id, allow)
+    void window.veylens.answerApproval(chatId, item.id, allow)
   const writes = item.tool === "execute_sql" || item.tool === "execute_plan"
   const removes = item.tool === "remove_from_dashboard" || item.tool === "delete_dashboard"
 
@@ -951,7 +951,7 @@ function Composer({ ref }: { ref?: Ref<ComposerHandle> }) {
               label="Stop"
               variant="outline"
               className="size-7 rounded-full"
-              onClick={() => chat && void window.veydata.stopChat(chat.id)}
+              onClick={() => chat && void window.veylens.stopChat(chat.id)}
             >
               <Square className="size-2.5 fill-current" />
             </IconButton>

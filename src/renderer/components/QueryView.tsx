@@ -96,7 +96,7 @@ const ASSIST_LABEL: Record<AssistMode, string> = {
 }
 
 /** Where the height an answer was dragged to is kept, for every SQL tab. */
-const ANSWER_HEIGHT_KEY = "veydata.queryAnswerHeight"
+const ANSWER_HEIGHT_KEY = "veylens.queryAnswerHeight"
 const ANSWER_HEIGHT = 200
 const ANSWER_MIN = 64
 /** What an answer leaves of the result below it, at least. */
@@ -321,7 +321,7 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
       if (writes && access === "read_only") {
         setRun({
           state: "failed",
-          error: `${connection?.name ?? "This connection"} is read-only in Vey Data, so only reads run here (SELECT, WITH, SHOW, EXPLAIN).`,
+          error: `${connection?.name ?? "This connection"} is read-only in Vey Lens, so only reads run here (SELECT, WITH, SHOW, EXPLAIN).`,
           sql: statement,
         })
         return
@@ -363,8 +363,8 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
       setPinNote(null)
       try {
         const result = plan
-          ? await window.veydata.explainQuery(tab.connectionId, statement)
-          : await window.veydata.runQuery(
+          ? await window.veylens.explainQuery(tab.connectionId, statement)
+          : await window.veylens.runQuery(
               tab.connectionId,
               statement,
               asReadOnly || access === "read_only"
@@ -416,7 +416,7 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
     const requestId = crypto.randomUUID()
     setAssisting({ state: "running", mode, requestId })
     try {
-      const answer = await window.veydata.assistSql({
+      const answer = await window.veylens.assistSql({
         requestId,
         connectionId: tab.connectionId,
         mode,
@@ -504,7 +504,7 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
             icon={<Lock />}
             title={
               access === "read_only"
-                ? "This connection is read-only in Vey Data: only reads run."
+                ? "This connection is read-only in Vey Lens: only reads run."
                 : "Opened by the assistant, so it runs in a read-only transaction. Editing it makes it yours."
             }
           >
@@ -569,7 +569,7 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
               onAsk={(instruction) => void assist("generate", instruction)}
               onCancel={() => {
                 if (assisting.state === "running") {
-                  void window.veydata.cancelAssist(assisting.requestId)
+                  void window.veylens.cancelAssist(assisting.requestId)
                 }
                 setAssisting({ state: "idle" })
               }}

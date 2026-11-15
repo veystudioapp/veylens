@@ -137,12 +137,12 @@ export function AuditLogPage() {
 
   useEffect(() => {
     let live = true
-    window.veydata.listAudit().then(
+    window.veylens.listAudit().then(
       (found) => live && setEntries(found),
       (failure) => live && setError(errorMessage(failure))
     )
     // New entries come in as they happen.
-    const stop = window.veydata.onChatEvent((event) => {
+    const stop = window.veylens.onChatEvent((event) => {
       if (event.type === "audit") setEntries((current) => (current ? [event.entry, ...current] : current))
     })
     return () => {
@@ -186,7 +186,7 @@ export function AuditLogPage() {
   }, [entries, connections])
 
   const exportCsv = () =>
-    downloadCsv(`Vey Data audit log ${new Date().toISOString().slice(0, 10)}`, {
+    downloadCsv(`Vey Lens audit log ${new Date().toISOString().slice(0, 10)}`, {
       columns: ["time", "actor", "action", "tool", "connection", "status", "summary", "sql", "rows", "ms", "detail"].map(
         (name) => ({ name, type: "text", kind: "text" as const })
       ),
@@ -212,7 +212,7 @@ export function AuditLogPage() {
       <div className="shrink-0 border-b py-4 pr-14 pl-6">
         <h2 className="text-[15px] font-semibold tracking-tight">Audit log</h2>
         <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-          What was run, changed or refused through Vey Data — by you in a SQL tab or a
+          What was run, changed or refused through Vey Lens — by you in a SQL tab or a
           table, and by the assistant through its tools — and changes to connections,
           permissions and tools. Browsing a table and dashboards refreshing are not
           kept. The last 5,000 entries stay on this machine only.
@@ -259,7 +259,7 @@ export function AuditLogPage() {
                 destructive: true,
               })
             ) {
-              await window.veydata.clearAudit()
+              await window.veylens.clearAudit()
               setEntries([])
             }
           }}

@@ -51,7 +51,7 @@ function useOptions(connectionId: string, sql: string) {
     const key = `${connectionId}\n${sql}`
     let pending = optionCache.get(key)
     if (!pending) {
-      pending = window.veydata
+      pending = window.veylens
         .runQuery(connectionId, sql, true)
         .then((result) =>
           result.rows

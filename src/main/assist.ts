@@ -9,7 +9,7 @@ import { claudeEnvironment, locateClaude } from "./claude-bin"
 import type { Connections } from "./connections"
 import type { Library } from "./library"
 
-const ASSIST_PROMPT_BASE = `You are the SQL assistant built into the query editor of Vey Data, a desktop database explorer. You are asked one thing about the SQL in the editor — write it, explain it, or fix it — and you answer once; there is no conversation.
+const ASSIST_PROMPT_BASE = `You are the SQL assistant built into the query editor of Vey Lens, a desktop database explorer. You are asked one thing about the SQL in the editor — write it, explain it, or fix it — and you answer once; there is no conversation.
 
 Use your tools to look before you write: list_tables and describe_table for the real names, get_business_context for what the data means and the metrics the user defined (use a defined metric's SQL when the request involves it), run_query to check that a statement you propose runs and returns what was meant. Every tool is read-only.
 
