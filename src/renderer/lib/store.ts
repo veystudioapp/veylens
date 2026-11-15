@@ -5,6 +5,7 @@ import {
   type AccessMode,
   type AgentStatus,
   type Chat,
+  type ChatImage,
   type ChatEvent,
   type ChatEffort,
   type ChartSpec,
@@ -122,7 +123,7 @@ type State = {
   newChat(): Promise<void>
   selectChat(chatId: string): Promise<void>
   deleteChat(chatId: string): Promise<void>
-  send(text: string): Promise<void>
+  send(text: string, images?: ChatImage[]): Promise<void>
   setModel(model: string | null, effort: ChatEffort | null): void
   setDraft(draft: string | null): void
 
@@ -564,12 +565,13 @@ export const useStore = create<State>((set, get) => {
       if (get().chat?.id === chatId) await get().newChat()
     },
 
-    async send(text) {
+    async send(text, images) {
       const { chat, model, effort } = get()
       if (!chat) return
       await api().sendMessage({
         chatId: chat.id,
         text,
+        ...(images?.length && { images }),
         model,
         effort,
         context: {

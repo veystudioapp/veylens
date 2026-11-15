@@ -64,6 +64,7 @@ const api: DesktopApi = {
   getChat: (chatId) => ipcRenderer.invoke(IPC.getChat, chatId),
   deleteChat: (chatId) => ipcRenderer.invoke(IPC.deleteChat, chatId),
   sendMessage: (input) => ipcRenderer.invoke(IPC.sendMessage, input),
+  chatImage: (name) => ipcRenderer.invoke(IPC.chatImage, name),
   stopChat: (chatId) => ipcRenderer.invoke(IPC.stopChat, chatId),
   answerApproval: (chatId, toolId, allow) =>
     ipcRenderer.invoke(IPC.answerApproval, chatId, toolId, allow),

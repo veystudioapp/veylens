@@ -7,7 +7,10 @@
  */
 
 import type { ToolMode } from "./agent"
+import type { ChatImage } from "./chat-images"
 import type { MentionRef } from "./mentions"
+
+export type { ChatImage } from "./chat-images"
 
 // ── Connections ────────────────────────────────────────────────────────────
 
@@ -809,7 +812,15 @@ export function chatEfforts(
 export type ToolStatus = "running" | "awaiting" | "done" | "error" | "denied"
 
 export type ChatItem =
-  | { kind: "user"; id: string; text: string }
+  | {
+      kind: "user"
+      id: string
+      text: string
+      /** The pictures sent with it, by file name, `[n - 1]` for `[Image #n]`.
+       * Kept as files beside the chats rather than in the chat, which would
+       * otherwise be megabytes of base64 re-read on every open. */
+      images?: string[]
+    }
   | { kind: "assistant"; id: string; text: string }
   | {
       kind: "tool"
@@ -879,6 +890,8 @@ export type SendInput = {
   chatId: string
   text: string
   context: ViewerContext
+  /** Pasted or dropped pictures, each named by an `[Image #n]` in `text`. */
+  images?: ChatImage[]
   /** A row's `value` from `agentModels`, or null to pass no `--model`. */
   model: string | null
   /** Null passes no `--effort`, leaving the CLI's own. */
@@ -1027,6 +1040,8 @@ export type DesktopApi = {
   getChat(chatId: string): Promise<Chat | null>
   deleteChat(chatId: string): Promise<void>
   sendMessage(input: SendInput): Promise<void>
+  /** A sent picture as a `data:` URL, or null once it is gone. */
+  chatImage(name: string): Promise<string | null>
   stopChat(chatId: string): Promise<void>
   /** Answers the card an `execute_sql` call is waiting on. */
   answerApproval(chatId: string, toolId: string, allow: boolean): Promise<void>
@@ -1073,6 +1088,7 @@ export const IPC = {
   getChat: "chats:get",
   deleteChat: "chats:delete",
   sendMessage: "chats:send",
+  chatImage: "chats:image",
   stopChat: "chats:stop",
   answerApproval: "chats:approval",
   chatEvent: "chats:event",

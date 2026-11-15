@@ -99,6 +99,13 @@ void app.whenReady().then(() => {
   const assist = new Assist(dataDir, connections, library)
   registerIpc({ connections, chats, library, assist, audit })
 
+  // In dev the app runs inside the stock Electron bundle, so the Dock shows
+  // Electron's atom. A packaged build has the icon baked into its bundle (and
+  // `resources/` is not in its `files`), so this is dev-only.
+  if (process.env.VITE_DEV_SERVER_URL && process.platform === "darwin") {
+    app.dock?.setIcon(path.join(__dirname, "..", "resources", "icon.png"))
+  }
+
   createWindow()
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

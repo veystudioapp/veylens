@@ -16,6 +16,13 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 
+import {
+  EXTENSION,
+  imageProblem,
+  MAX_IMAGES,
+  type ChatImage,
+  type ChatImageType,
+} from "../shared/chat-images"
 import type {
   AgentStatus,
   Chat,
@@ -119,6 +126,9 @@ const IDLE_MS = 10 * 60_000
 
 const TITLE_LENGTH = 60
 
+/** A file `keepImages` names: an id and the extension it chose. */
+const PICTURE_NAME = /^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/
+
 const SYSTEM_PROMPT = `You are the data assistant inside Vey Data, a desktop database explorer. The user asks questions about their databases in plain language; you answer by inspecting the schema and running SQL through your tools.
 
 The window has three parts: an explorer listing connections, tables and dashboards, a viewer showing the table, query or dashboard the user has open, and this chat. Each user message starts with a <viewer> block saying which connection and tab they are looking at — that is what "this table", "here" or an unqualified table name refers to. Use it as the default connection. If it names none and several connections exist, ask which one.
@@ -160,16 +170,34 @@ type Stored = {
 
 /** The queue behind a session's prompt: messages wait here until the CLI
  * asks for the next one, and the session stays open for as long as it does. */
-class Inbox {
+export class Inbox {
   private readonly waiting: SDKUserMessage[] = []
   private wake: (() => void) | null = null
   private closed = false
 
-  push(text: string): void {
+  /** Words, or words with pictures after them in the order they are
+   * numbered — each one stands where its `[Image #n]` is in `text`. */
+  push(text: string, images: ChatImage[] = []): void {
     if (this.closed) return
     this.waiting.push({
       type: "user",
-      message: { role: "user", content: text },
+      message: {
+        role: "user",
+        content:
+          images.length === 0
+            ? text
+            : [
+                { type: "text", text },
+                ...images.map((image) => ({
+                  type: "image" as const,
+                  source: {
+                    type: "base64" as const,
+                    media_type: image.mediaType,
+                    data: image.data,
+                  },
+                })),
+              ],
+      },
       parent_tool_use_id: null,
     })
     this.wake?.()
@@ -383,6 +411,8 @@ export class Chats {
   private readonly busy = new Set<string>()
   private readonly directory: string
   private readonly workspace: string
+  /** The pictures sent in any chat, one file each — see `ChatItem`. */
+  private readonly pictures: string
 
   constructor(
     dataDir: string,
@@ -395,6 +425,7 @@ export class Chats {
     // Where each `claude` runs: an empty directory of this app's own, so the
     // session finds no project files, no CLAUDE.md and no `.mcp.json`.
     this.workspace = path.join(dataDir, "agent")
+    this.pictures = path.join(dataDir, "chat-images")
     mkdirSync(this.directory, { recursive: true })
     mkdirSync(this.workspace, { recursive: true })
 
@@ -495,9 +526,48 @@ export class Chats {
 
   delete(chatId: string): void {
     this.closeLive(chatId)
+    const chat = this.chats.get(chatId)
     this.chats.delete(chatId)
     this.busy.delete(chatId)
     rmSync(path.join(this.directory, `${chatId}.json`), { force: true })
+    for (const item of chat?.items ?? []) {
+      if (item.kind !== "user") continue
+      for (const name of item.images ?? []) {
+        rmSync(path.join(this.pictures, name), { force: true })
+      }
+    }
+  }
+
+  /** A sent picture, for the transcript to draw. Only a name this class gave
+   * out is read: the renderer does not get to name a path. */
+  image(name: string): string | null {
+    const match = PICTURE_NAME.exec(name)
+    if (!match) return null
+    const type = (Object.keys(EXTENSION) as ChatImageType[]).find(
+      (key) => EXTENSION[key] === match[1]
+    )
+    try {
+      const data = readFileSync(path.join(this.pictures, name)).toString("base64")
+      return `data:${type};base64,${data}`
+    } catch {
+      return null
+    }
+  }
+
+  /** Each picture written to a file of its own, by the name the user line
+   * keeps. A write that fails costs the transcript that thumbnail and nothing
+   * else: the bytes still go to the model. */
+  private keepImages(images: ChatImage[]): string[] {
+    mkdirSync(this.pictures, { recursive: true })
+    return images.flatMap((image) => {
+      const name = `${randomUUID()}.${EXTENSION[image.mediaType]}`
+      try {
+        writeFileSync(path.join(this.pictures, name), Buffer.from(image.data, "base64"))
+        return [name]
+      } catch {
+        return []
+      }
+    })
   }
 
   private put(chat: Stored, item: ChatItem): void {
@@ -545,20 +615,35 @@ export class Chats {
     if (this.busy.has(chat.id)) {
       throw new Error("Wait for the current answer, or stop it first.")
     }
+    const images = input.images ?? []
+    if (images.length > MAX_IMAGES) {
+      throw new Error(`At most ${MAX_IMAGES} pictures go in one message.`)
+    }
+    for (const [index, image] of images.entries()) {
+      const problem = imageProblem(image)
+      if (problem) throw new Error(`Image #${index + 1}: ${problem}.`)
+    }
 
     if (!chat.items.some((item) => item.kind === "user")) {
       const line = text.split("\n")[0] ?? text
       chat.title =
         line.length > TITLE_LENGTH ? `${line.slice(0, TITLE_LENGTH)}…` : line
     }
-    this.put(chat, { kind: "user", id: randomUUID(), text })
+    const kept = images.length ? this.keepImages(images) : []
+    this.put(chat, {
+      kind: "user",
+      id: randomUUID(),
+      text,
+      ...(kept.length === images.length && kept.length > 0 && { images: kept }),
+    })
     this.setBusy(chat, true)
 
     try {
       const live = await this.open(chat, input.model, input.effort)
       live.interrupted = false
       live.inbox.push(
-        `${describeContext(input.context, this.connections, this.library)}\n\n${text}`
+        `${describeContext(input.context, this.connections, this.library)}\n\n${text}`,
+        images
       )
     } catch (error) {
       this.fail(chat, error instanceof Error ? error.message : String(error))

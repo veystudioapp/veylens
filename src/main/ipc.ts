@@ -222,6 +222,7 @@ export function registerIpc({
     getChat: async (chatId) => chats.get(chatId),
     deleteChat: async (chatId) => chats.delete(chatId),
     sendMessage: (input) => chats.send(input),
+    chatImage: async (name) => chats.image(name),
     stopChat: (chatId) => chats.stop(chatId),
     answerApproval: async (chatId, toolId, allow) =>
       chats.answerApproval(chatId, toolId, allow),

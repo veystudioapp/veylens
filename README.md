@@ -104,6 +104,14 @@ bun run package    # electron-builder → release/
   (`findMentions`, `shared/mentions.ts`) and listed in the `<viewer>` block
   with what it is — schema, dashboard id and tiles, a metric's SQL, a
   connection's id — looked up again in main, so a deleted one is said to be gone.
+- **Pictures in the chat** — paste a screenshot, drop images anywhere on the
+  chat panel, or pick them with the picture button. Each is read as it
+  arrives (too large is redrawn smaller) and written into the text as
+  `[Image #n]`, the CLI's own tag, with a thumbnail above the field; deleting
+  the tag or the thumbnail takes it out, and what is sent is renumbered
+  (`attachedIn`, `shared/chat-images.ts`). It goes to the model as an image
+  block; the transcript keeps a file per picture in `chat-images/`, deleted
+  with its chat.
 - **Audit log** (Settings › Data) — what was run, changed or refused
   through the app, newest first by day: statements from a SQL tab (reads
   and writes), saved row edits, the assistant's queries, statements, plans,

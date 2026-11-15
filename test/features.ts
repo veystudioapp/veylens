@@ -1511,6 +1511,78 @@ await check("mentions: @ finds tables, dashboards, metrics and connections, and 
   library.deleteDashboard(board.id)
   library.saveKnowledge(shop.id, { notes: "", metrics: [], updatedAt: 0 })
 })
+await check("chat images: [Image #n] tags, kept as files, sent as image blocks", async () => {
+  const ci = await import("../src/shared/chat-images")
+  const { Inbox } = await import("../src/main/chats")
+  const a = { mediaType: "image/png" as const, data: "iVBORw0KGgo=" }
+  const b = { mediaType: "image/jpeg" as const, data: "/9j/4AAQ" }
+
+  // Renumbered in the order the text names them; a tag naming nothing is text.
+  assert.deepEqual(ci.attachedIn("see [Image #2] and [Image #1] [Image #2] [Image #9]", [a, b]), {
+    text: "see [Image #1] and [Image #2] [Image #1] [Image #9]",
+    images: [b, a],
+  })
+  // The first one deleted: the second goes alone, as #1.
+  assert.deepEqual(ci.attachedIn("only [Image #2]", [a, b]), { text: "only [Image #1]", images: [b] })
+  assert.deepEqual(ci.namedIn("x [Image #2]", [a, b]), [{ n: 2, image: b }])
+  assert.equal(ci.withoutTag("look [Image #1] here [Image #2]", 1), "look here [Image #2]")
+  assert.equal(ci.imageProblem(a), null)
+  assert.match(ci.imageProblem({ mediaType: "image/tiff", data: "AAAA" })!, /not a picture/)
+  assert.match(ci.imageProblem({ mediaType: "image/png", data: "not base64!" })!, /base64/)
+  assert.match(ci.imageProblem({ mediaType: "image/png", data: "A".repeat(ci.MAX_IMAGE_BASE64 + 4) })!, /5 MB/)
+
+  // What the CLI is handed: the words, then each picture in order.
+  const inbox = new Inbox()
+  inbox.push("plain")
+  inbox.push("two [Image #1] [Image #2]", [a, b])
+  inbox.close()
+  const sent = []
+  for await (const message of inbox.stream()) sent.push(message.message.content)
+  assert.equal(sent[0], "plain")
+  assert.deepEqual(sent[1], [
+    { type: "text", text: "two [Image #1] [Image #2]" },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: a.data } },
+    { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b.data } },
+  ])
+
+  // Through `send`, with the session stubbed: the line keeps file names, the
+  // files hold the bytes, and deleting the chat takes them too.
+  const where = mkdtempSync(path.join(tmpdir(), "veydata-images-"))
+  const chats = new Chats(where, connections, library, () => {})
+  const pushed: { text: string; images: unknown[] }[] = []
+  ;(chats as unknown as { open: () => Promise<unknown> }).open = async () => ({
+    interrupted: false,
+    inbox: { push: (text: string, images: unknown[] = []) => pushed.push({ text, images }) },
+  })
+  const chat = chats.create()
+  const context = { connectionId: null, tab: null }
+  await chats.send({ chatId: chat.id, text: "what is this? [Image #1]", images: [a], context, model: null, effort: null })
+  assert.deepEqual(pushed[0]!.images, [a])
+  assert.match(pushed[0]!.text, /what is this\? \[Image #1\]$/)
+  const line = chats.get(chat.id)!.items[0]!
+  assert.equal(line.kind, "user")
+  const names = (line as { images?: string[] }).images!
+  assert.equal(names.length, 1)
+  assert.match(names[0]!, /^[0-9a-f-]{36}\.png$/)
+  assert.equal(chats.image(names[0]!), `data:image/png;base64,${a.data}`)
+  // Only a name it gave out is read.
+  assert.equal(chats.image("../connections.json"), null)
+  assert.equal(chats.image(`../chats/${chat.id}.json`), null)
+
+  // A picture that cannot go is refused before anything is said.
+  ;(chats as unknown as { busy: Set<string> }).busy.clear()
+  const other = chats.create()
+  await assert.rejects(
+    chats.send({ chatId: other.id, text: "[Image #1]", images: [{ mediaType: "image/tiff", data: "AAAA" } as never], context, model: null, effort: null }),
+    /Image #1: .*not a picture/
+  )
+  assert.equal(chats.get(other.id)!.items.length, 0)
+
+  chats.delete(chat.id)
+  assert.equal(chats.image(names[0]!), null)
+  rmSync(where, { recursive: true, force: true })
+})
+
 await lockedDriver.close()
 await sample.close()
 rmSync(dir, { recursive: true, force: true })

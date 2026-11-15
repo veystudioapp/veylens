@@ -66,6 +66,9 @@ export type MentionFieldHandle = {
   element: HTMLTextAreaElement | null
   /** Puts an `@` at the caret and opens the menu. */
   startMention(): void
+  /** Writes `text` at the caret as a word of its own, and puts the caret
+   * after it. */
+  insert(text: string): void
 }
 
 type Props = Omit<
@@ -74,6 +77,9 @@ type Props = Omit<
 > & {
   value: string
   onValueChange: (value: string) => void
+  /** How many pictures the draft holds: `[Image #1]`…`[Image #n]` are tinted
+   * as what they stand for. */
+  images?: number
 }
 
 /**
@@ -86,7 +92,7 @@ type Props = Omit<
  */
 export const MentionField = forwardRef<MentionFieldHandle, Props>(
   function MentionField(
-    { value, onValueChange, onKeyDown, className, ...props },
+    { value, onValueChange, onKeyDown, className, images = 0, ...props },
     ref
   ) {
     const area = useRef<HTMLTextAreaElement>(null)
@@ -129,6 +135,17 @@ export const MentionField = forwardRef<MentionFieldHandle, Props>(
         dismissed.current = null
         onValueChange(before + insert + value.slice(end))
         element.focus()
+      },
+      insert(text) {
+        const element = area.current
+        const at = element?.selectionStart ?? value.length
+        const end = element?.selectionEnd ?? at
+        const before = value.slice(0, at)
+        const after = value.slice(end)
+        const lead = before && !/\s$/.test(before) ? " " : ""
+        const trail = /^\s/.test(after) ? "" : " "
+        pending.current = at + lead.length + text.length + trail.length
+        onValueChange(before + lead + text + trail + after)
       },
     }))
 
@@ -273,7 +290,7 @@ export const MentionField = forwardRef<MentionFieldHandle, Props>(
             TEXT_BOX
           )}
         >
-          <Marks segments={segments} toneOf={toneOf} />
+          <Marks segments={segments} toneOf={toneOf} images={images} />
           {"​"}
         </div>
         <textarea
@@ -309,19 +326,63 @@ export const MentionField = forwardRef<MentionFieldHandle, Props>(
   }
 )
 
+const IMAGE_TAG = /(\[Image #(\d+)\])/
+
+/** A plain run, with the `[Image #n]` tags that name a held picture tinted. */
+function Plain({
+  text,
+  images,
+  visible,
+}: {
+  text: string
+  images: number
+  visible?: boolean
+}) {
+  if (!images || !text.includes("[Image #")) return <span>{text}</span>
+  // `split` with a capture group keeps the tag, and its number after it.
+  const parts = text.split(IMAGE_TAG)
+  const out: ReactNode[] = []
+  for (let index = 0; index < parts.length; index += 3) {
+    if (parts[index]) out.push(parts[index])
+    const tag = parts[index + 1]
+    if (tag === undefined) continue
+    const n = Number(parts[index + 2])
+    out.push(
+      n >= 1 && n <= images ? (
+        <span
+          key={index}
+          className={cn(
+            "rounded-[3px] bg-muted-foreground/12 ring-1 ring-muted-foreground/25",
+            visible && "font-medium text-muted-foreground"
+          )}
+        >
+          {tag}
+        </span>
+      ) : (
+        tag
+      )
+    )
+  }
+  return <span>{out}</span>
+}
+
 function Marks({
   segments,
   toneOf,
   visible,
+  images = 0,
 }: {
   segments: MentionSegment[]
   toneOf: (target: MentionTarget) => Tone
   visible?: boolean
+  images?: number
 }) {
   return (
     <>
       {segments.map((segment, index) => {
-        if (!segment.target) return <span key={index}>{segment.text}</span>
+        if (!segment.target) {
+          return <Plain key={index} text={segment.text} images={images} visible={visible} />
+        }
         const color = toneColor(toneOf(segment.target))
         return (
           <span
@@ -347,8 +408,10 @@ function Marks({
 }
 
 /** A sent message, with its mentions tinted as they were in the field. */
-export function MentionText({ text }: { text: string }) {
+export function MentionText({ text, images = 0 }: { text: string; images?: number }) {
   const targets = useMentionTargets()
   const toneOf = useToneOf()
-  return <Marks segments={markMentions(text, targets)} toneOf={toneOf} visible />
+  return (
+    <Marks segments={markMentions(text, targets)} toneOf={toneOf} images={images} visible />
+  )
 }

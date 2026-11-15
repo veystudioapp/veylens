@@ -9,6 +9,7 @@ import {
   ChevronRight,
   CircleAlert,
   ExternalLink,
+  ImagePlus,
   LayoutDashboard,
   PanelRightClose,
   Plus,
@@ -21,13 +22,25 @@ import {
 } from "lucide-react"
 import {
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
+  type DragEvent,
   type ReactNode,
+  type Ref,
 } from "react"
 
+import {
+  attachedIn,
+  imageTag,
+  MAX_IMAGES,
+  namedIn,
+  withoutTag,
+  type ChatImage,
+} from "@shared/chat-images"
 import {
   chatEfforts,
   isTextTile,
@@ -45,6 +58,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Spinner } from "@/components/ui/spinner"
+import { dataUrlOf, readImages } from "@/lib/images"
 import { effortFor, useAgentModels } from "@/lib/models"
 import { errorMessage, useStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -52,6 +66,7 @@ import { cn } from "@/lib/utils"
 import { Chart, ResultTable } from "./Chart"
 import { PinMenu } from "./chart-controls"
 import { ChatHistory } from "./ChatHistory"
+import { ImageThumb, SentImages } from "./chat-images"
 import { IconButton } from "./icon-button"
 import { ChatArt } from "./illustrations"
 import { Markdown } from "./Markdown"
@@ -707,7 +722,8 @@ function Item({ item, chatId }: { item: ChatItem; chatId: string }) {
     case "user":
       return (
         <div className="selectable ml-8 self-end rounded-md border bg-muted px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap text-foreground">
-          <MentionText text={item.text} />
+          {item.images && <SentImages names={item.images} />}
+          <MentionText text={item.text} images={item.images?.length} />
         </div>
       )
     case "assistant":
@@ -725,7 +741,18 @@ function Item({ item, chatId }: { item: ChatItem; chatId: string }) {
 const DIAGNOSE =
   "Diagnose: why did [metric] change in [this period] compared with [the previous period]?"
 
-function Composer() {
+type ComposerHandle = {
+  /** The pictures among `files`, read and written into the draft. */
+  addFiles(files: Iterable<File>): void
+}
+
+const NO_IMAGES: ChatImage[] = []
+
+/** Whether a drag carries files — a drag of text is the field's own. */
+const carriesFiles = (event: DragEvent) =>
+  [...event.dataTransfer.types].includes("Files")
+
+function Composer({ ref }: { ref?: Ref<ComposerHandle> }) {
   const chat = useStore((state) => state.chat)
   const draft = useStore((state) => state.draft)
   const setDraft = useStore((state) => state.setDraft)
@@ -747,6 +774,57 @@ function Composer() {
   const [error, setError] = useState<string | null>(null)
   const field = useRef<MentionFieldHandle>(null)
   const busy = chat?.busy ?? false
+  /**
+   * Every picture added to this draft, in the order it was added: `[Image #n]`
+   * is `images[n - 1]`. Never shortened while the draft lives, so a number
+   * keeps meaning the same picture after another is taken out.
+   */
+  const [images, setImages] = useState(NO_IMAGES)
+  const held = useRef(images)
+  held.current = images
+  const pictures = namedIn(text, images)
+
+  function insertImages(added: ChatImage[]) {
+    const room = MAX_IMAGES - namedIn(field.current?.element?.value ?? "", held.current).length
+    const taken = added.slice(0, Math.max(0, room))
+    if (taken.length < added.length) {
+      setError(`At most ${MAX_IMAGES} pictures go in one message.`)
+    }
+    if (!taken.length) return
+    const first = held.current.length + 1
+    held.current = [...held.current, ...taken]
+    setImages(held.current)
+    field.current?.insert(taken.map((_, index) => imageTag(first + index)).join(" "))
+    field.current?.element?.focus()
+  }
+
+  function addFiles(files: Iterable<File>) {
+    const list = [...files]
+    if (!agentOk || !list.length) return
+    void readImages(list).then((read) => {
+      if (read.length) {
+        setError(null)
+        insertImages(read)
+      } else {
+        setError("Only pictures can be added to a message — PNG, JPEG, GIF or WebP.")
+      }
+    })
+  }
+
+  useImperativeHandle(ref, () => ({ addFiles }))
+
+  /** A picture on the clipboard goes in as one; anything else pasted is the
+   * field's own business. */
+  function paste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = [...event.clipboardData.files].filter((file) =>
+      file.type.startsWith("image/")
+    )
+    if (!files.length) return
+    event.preventDefault()
+    addFiles(files)
+  }
+
+  const picker = useRef<HTMLInputElement>(null)
 
   // Text put here from elsewhere — a quick action, a starter — with its first
   // [blank] selected, ready to be typed over.
@@ -773,15 +851,19 @@ function Composer() {
   }, [text])
 
   const submit = async () => {
-    const message = text.trim()
-    if (!message || busy || !chat) return
+    const draftText = text
+    const draftImages = images
+    const message = attachedIn(text.trim(), images)
+    if (!message.text || busy || !chat) return
     setText("")
+    setImages(NO_IMAGES)
     setError(null)
     try {
-      await send(message)
+      await send(message.text, message.images)
     } catch (failure) {
       setError(errorMessage(failure))
-      setText(message)
+      setText(draftText)
+      setImages(draftImages)
     }
   }
 
@@ -789,6 +871,20 @@ function Composer() {
     <div className="shrink-0 px-3 pb-3">
       {error && <ErrorNote className="mb-2">{error}</ErrorNote>}
       <div className="rounded-lg border border-input bg-background shadow-xs transition-colors focus-within:border-ring dark:bg-input/30">
+        {/* The pictures the text still names: a tag deleted by hand takes
+            its thumbnail with it, so the strip is the truth about what goes. */}
+        {pictures.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-3 pt-3" aria-label="Pictures">
+            {pictures.map(({ n, image }) => (
+              <ImageThumb
+                key={n}
+                n={n}
+                src={dataUrlOf(image)}
+                onRemove={() => setText((current) => withoutTag(current, n))}
+              />
+            ))}
+          </div>
+        )}
         <MentionField
           ref={field}
           rows={2}
@@ -797,6 +893,8 @@ function Composer() {
           placeholder="Ask about your data — type @ to mention a table or dashboard…"
           aria-label="Message"
           onValueChange={setText}
+          onPaste={paste}
+          images={images.length}
           onKeyDown={(event) => {
             // Enter while an input method is composing picks a candidate; it
             // is not the user sending.
@@ -826,6 +924,26 @@ function Composer() {
           >
             <AtSign className="size-3.5" />
           </IconButton>
+          <IconButton
+            label="Add a picture — or paste or drop one"
+            className="size-7 text-muted-foreground"
+            disabled={!agentOk}
+            onClick={() => picker.current?.click()}
+          >
+            <ImagePlus className="size-3.5" />
+          </IconButton>
+          <input
+            ref={picker}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp,image/*"
+            multiple
+            hidden
+            onChange={(event) => {
+              addFiles(event.currentTarget.files ?? [])
+              // The same file can be picked again.
+              event.currentTarget.value = ""
+            }}
+          />
           <div className="flex-1" />
           {busy ? (
             <IconButton
@@ -910,6 +1028,11 @@ export function ChatPanel({ onCollapse }: { onCollapse: () => void }) {
       )?.name
   )
   const scroller = useRef<HTMLDivElement>(null)
+  const composer = useRef<ComposerHandle>(null)
+  /** Enter and leave fire for every child crossed; the drag is over the
+   * panel while more have been entered than left. */
+  const depth = useRef(0)
+  const [dropping, setDropping] = useState(false)
   // Whether the view was at the bottom before this render: only then does
   // new text pull it down, so reading back is not interrupted.
   const pinned = useRef(true)
@@ -945,7 +1068,39 @@ export function ChatPanel({ onCollapse }: { onCollapse: () => void }) {
         </IconButton>
       </div>
 
-      <div className="sheet mr-1.5 mb-1.5 flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg">
+      <div
+        className="sheet relative mr-1.5 mb-1.5 flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg"
+        onDragEnter={(event) => {
+          if (!carriesFiles(event) || agent?.ok === false) return
+          event.preventDefault()
+          depth.current += 1
+          setDropping(true)
+        }}
+        onDragOver={(event) => {
+          if (!carriesFiles(event) || agent?.ok === false) return
+          // Without this the drop is refused, and the window would open the file.
+          event.preventDefault()
+          event.dataTransfer.dropEffect = "copy"
+        }}
+        onDragLeave={(event) => {
+          if (!carriesFiles(event)) return
+          depth.current = Math.max(0, depth.current - 1)
+          if (depth.current === 0) setDropping(false)
+        }}
+        onDrop={(event) => {
+          if (!carriesFiles(event)) return
+          event.preventDefault()
+          depth.current = 0
+          setDropping(false)
+          composer.current?.addFiles(event.dataTransfer.files)
+        }}
+      >
+        {dropping && (
+          <div className="pointer-events-none absolute inset-1.5 z-40 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/50 bg-background/85 text-xs text-muted-foreground backdrop-blur-[1px]">
+            <ImagePlus className="size-5 text-primary" />
+            Drop pictures to add them to the message
+          </div>
+        )}
         {agent?.ok === false && (
           <div className="selectable shrink-0 border-b border-warning/40 bg-warning/5 px-3 py-2 text-xs leading-relaxed">
             {agent.error}
@@ -1010,7 +1165,7 @@ export function ChatPanel({ onCollapse }: { onCollapse: () => void }) {
           )}
         </div>
 
-        <Composer />
+        <Composer ref={composer} />
       </div>
     </div>
   )

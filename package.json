@@ -25,6 +25,7 @@
     "@base-ui/react": "^1.6.0",
     "@electric-sql/pglite": "^0.5.16",
     "@electric-sql/pglite-socket": "^0.2.19",
+    "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4",
     "@types/node": "^22",
     "@types/pg": "^8",
@@ -63,7 +64,8 @@
       "dist-renderer/**/*"
     ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "resources"
     },
     "mac": {
       "category": "public.app-category.developer-tools",

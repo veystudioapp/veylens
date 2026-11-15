@@ -1,0 +1,19 @@
+<svg viewBox="6 16.5 88 67" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!--
+  The app's mark: rows of a table with one cell picked out — the value a
+  query lands on, solid among the lanes around it. Drawn in the family's
+  register (Vey's lane switch, Vey Motion's diamond and speed lines): one
+  stroke width, ends cut square, a solid shape set among strokes.
+
+  One colour — black here; resources/logo.svg draws it in white on the plate,
+  path for path. The box is the ink's measured bounds, the stroke's own
+  half-width included.
+-->
+<path d="M36 36H64V64H36Z" fill="#000000"/>
+<g stroke="#000000" stroke-width="13">
+  <path d="M6 23H94"/>
+  <path d="M6 77H94"/>
+  <path d="M6 50H26"/>
+  <path d="M74 50H94"/>
+</g>
+</svg>
