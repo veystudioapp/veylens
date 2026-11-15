@@ -1428,6 +1428,89 @@ await check("access: a read-only connection's driver refuses writes, and asks th
   const read = await lockedDriver.query("select count(*) from audit_log", { readOnly: false, maxRows: 1 })
   assert.equal(read.rows[0]![0], "2")
 })
+await check("mentions: @ finds tables, dashboards, metrics and connections, and says what each is", async () => {
+  const m = await import("../src/shared/mentions")
+  const { describeMentions } = await import("../src/main/chats")
+  const sources = {
+    connection: { id: "c1", name: "Shop", engine: "postgres" },
+    connections: [
+      { id: "c1", name: "Shop", engine: "postgres" },
+      { id: "c2", name: "warehouse", engine: "mysql" },
+    ],
+    schemas: [
+      { name: "public", tables: [{ name: "orders", kind: "table" as const }, { name: "items", kind: "table" as const }, { name: "daily", kind: "view" as const }] },
+      { name: "archive", tables: [{ name: "items", kind: "table" as const }] },
+    ],
+    dashboards: [
+      { id: "d1", connectionId: "c1", title: "Sales overview", tiles: [1, 2] },
+      { id: "d2", connectionId: "c9", title: "Elsewhere", tiles: [] },
+    ],
+    metrics: [{ id: "m1", name: "revenue", description: "Paid orders\nmore", sql: "sum(total)" }],
+  }
+  const targets = m.mentionTargets(sources)
+  // A unique table goes by its name; two that share one go by schema.
+  assert.deepEqual(
+    targets.map((t) => `${t.kind}:${t.token}`),
+    ["table:orders", "table:public.items", "table:archive.items", "view:daily", 'dashboard:"Sales overview"', "metric:revenue", "connection:warehouse"]
+  )
+  assert.equal(targets[0]!.detail, "public · table")
+  assert.equal(targets.find((t) => t.kind === "metric")!.detail, "Paid orders")
+
+  // Typing: where the @ starts, through a quote.
+  assert.deepEqual(m.mentionQuery("look at @ord", 12), { from: 8, filter: "ord" })
+  assert.deepEqual(m.mentionQuery('see @"Sales ov', 14), { from: 4, filter: "Sales ov" })
+  assert.equal(m.mentionQuery("mail me@example.com", 19), null)
+  assert.equal(m.mentionQuery("@orders and", 11), null)
+  assert.deepEqual(m.mentionQuery("@", 1), { from: 0, filter: "" })
+
+  // Picking: the name goes in with a space after it, not two.
+  assert.deepEqual(m.insertMention("look at @ord", { from: 8, filter: "ord" }, 12, "orders"), { text: "look at @orders ", caret: 16 })
+  assert.deepEqual(m.insertMention("@ord now", { from: 0, filter: "ord" }, 4, "orders"), { text: "@orders now", caret: 7 })
+  assert.deepEqual(m.insertMention('@"Sal"', { from: 0, filter: "Sal" }, 5, '"Sales overview"'), { text: '@"Sales overview" ', caret: 18 })
+
+  // Ranking: starts-with first; nothing typed shows some of each kind.
+  assert.equal(m.rankMentions(targets, "sal")[0]!.kind, "dashboard")
+  assert.deepEqual(m.rankMentions(targets, "rev").map((t) => t.name), ["revenue"])
+  assert.equal(m.rankMentions(targets, "ware")[0]!.kind, "connection")
+  assert.deepEqual(new Set(m.rankMentions(targets, "").map((t) => t.kind)), new Set(["table", "view", "dashboard", "metric", "connection"]))
+
+  // Reading a message: case and a full stop do not matter; an email does not count.
+  const text = 'Compare @Orders with @"Sales overview", @public.orders and @archive.items. Mail a@b.com @nothing'
+  const found = m.findMentions(text, targets)
+  assert.deepEqual(found.map((f) => `${f.token}→${f.ref.kind}:${f.ref.schema ?? ""}.${f.ref.name}`), [
+    "@Orders→table:public.orders",
+    '@"Sales overview"→dashboard:.Sales overview',
+    "@archive.items→table:archive.items",
+  ])
+  const segments = m.markMentions("x @orders.", targets)
+  assert.deepEqual(segments.map((s) => [s.text, s.target?.kind ?? null]), [["x ", null], ["@orders", "table"], [".", null]])
+  assert.deepEqual(m.markMentions("", targets), [{ text: "", target: null }])
+
+  // And main says what each one is, looked up again.
+  library.saveKnowledge(shop.id, { notes: "", metrics: [{ id: "", name: "revenue", description: "Paid orders", sql: "sum(total)" }], updatedAt: 0 })
+  const metric = library.knowledge(shop.id).metrics[0]!
+  const board = library.saveDashboard({ id: "", connectionId: shop.id, title: "Sales overview", tiles: [{ id: "", title: "Orders", sql: "select 1", chart: null }], filters: [], refreshSeconds: 0, updatedAt: 0 })
+  const lines = describeMentions(
+    [
+      { token: "@orders", ref: { kind: "table", connectionId: shop.id, name: "orders", schema: "public" } },
+      { token: '@"Sales overview"', ref: { kind: "dashboard", connectionId: shop.id, name: "Sales overview", id: board.id } },
+      { token: "@revenue", ref: { kind: "metric", connectionId: shop.id, name: "revenue", id: metric.id } },
+      { token: "@Shop", ref: { kind: "connection", connectionId: shop.id, name: "Shop" } },
+      { token: "@old", ref: { kind: "dashboard", connectionId: shop.id, name: "old", id: "gone" } },
+      { token: "@x", ref: { kind: "table", connectionId: "nope", name: "x" } },
+    ],
+    connections,
+    library
+  )
+  assert.equal(lines[0], `- @orders → table public.orders on connection Shop (id ${shop.id})`)
+  assert.match(lines[1]!, new RegExp(`dashboard "Sales overview" \\(id ${board.id}\\).*tiles: Orders`))
+  assert.match(lines[2]!, /metric "revenue".*: Paid orders\n  computed as: sum\(total\)/)
+  assert.match(lines[3]!, /connection Shop .*use it for this request/)
+  assert.match(lines[4]!, /deleted/)
+  assert.match(lines[5]!, /no longer exists/)
+  library.deleteDashboard(board.id)
+  library.saveKnowledge(shop.id, { notes: "", metrics: [], updatedAt: 0 })
+})
 await lockedDriver.close()
 await sample.close()
 rmSync(dir, { recursive: true, force: true })

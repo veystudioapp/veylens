@@ -19,6 +19,9 @@ import {
   type ViewerContext,
   type ViewerTarget,
 } from "@shared/api"
+import { findMentions } from "@shared/mentions"
+
+import { currentMentionTargets } from "./mentions"
 
 export type TreeState =
   | { status: "loading" }
@@ -569,7 +572,10 @@ export const useStore = create<State>((set, get) => {
         text,
         model,
         effort,
-        context: get().viewerContext(),
+        context: {
+          ...get().viewerContext(),
+          mentions: findMentions(text, currentMentionTargets(get())),
+        },
       })
     },
 

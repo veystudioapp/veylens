@@ -7,6 +7,7 @@
  */
 
 import type { ToolMode } from "./agent"
+import type { MentionRef } from "./mentions"
 
 // ── Connections ────────────────────────────────────────────────────────────
 
@@ -857,6 +858,8 @@ export type ViewerContext = {
     | { kind: "dashboard"; title: string; tiles: string[] }
     | { kind: "knowledge" }
     | null
+  /** What the message points at with `@`, looked up as it was sent. */
+  mentions?: { token: string; ref: MentionRef }[]
 }
 
 export type ViewerTarget =

@@ -1,5 +1,6 @@
 import {
   ArrowUp,
+  AtSign,
   Ban,
   BookOpen,
   ChartColumn,
@@ -54,6 +55,7 @@ import { ChatHistory } from "./ChatHistory"
 import { IconButton } from "./icon-button"
 import { ChatArt } from "./illustrations"
 import { Markdown } from "./Markdown"
+import { MentionField, MentionText, type MentionFieldHandle } from "./mention-field"
 import { ModelMenu } from "./model-menu"
 import { ErrorNote } from "./state-view"
 
@@ -705,7 +707,7 @@ function Item({ item, chatId }: { item: ChatItem; chatId: string }) {
     case "user":
       return (
         <div className="selectable ml-8 self-end rounded-md border bg-muted px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap text-foreground">
-          {item.text}
+          <MentionText text={item.text} />
         </div>
       )
     case "assistant":
@@ -743,7 +745,7 @@ function Composer() {
   const agentOk = useStore((state) => state.agent?.ok !== false)
   const [text, setText] = useState("")
   const [error, setError] = useState<string | null>(null)
-  const area = useRef<HTMLTextAreaElement>(null)
+  const field = useRef<MentionFieldHandle>(null)
   const busy = chat?.busy ?? false
 
   // Text put here from elsewhere — a quick action, a starter — with its first
@@ -753,7 +755,7 @@ function Composer() {
     setDraft(null)
     setText(draft)
     requestAnimationFrame(() => {
-      const element = area.current
+      const element = field.current?.element
       if (!element) return
       element.focus()
       const blank = /\[[^\]]*\]/.exec(draft)
@@ -764,7 +766,7 @@ function Composer() {
 
   // The field grows with what is typed, up to a point.
   useLayoutEffect(() => {
-    const element = area.current
+    const element = field.current?.element
     if (!element) return
     element.style.height = "auto"
     element.style.height = `${Math.min(element.scrollHeight, 180)}px`
@@ -787,14 +789,14 @@ function Composer() {
     <div className="shrink-0 px-3 pb-3">
       {error && <ErrorNote className="mb-2">{error}</ErrorNote>}
       <div className="rounded-lg border border-input bg-background shadow-xs transition-colors focus-within:border-ring dark:bg-input/30">
-        <textarea
-          ref={area}
+        <MentionField
+          ref={field}
           rows={2}
           value={text}
           disabled={!agentOk}
-          placeholder="Ask about your data, or ask for a query…"
+          placeholder="Ask about your data — type @ to mention a table or dashboard…"
           aria-label="Message"
-          onChange={(event) => setText(event.target.value)}
+          onValueChange={setText}
           onKeyDown={(event) => {
             // Enter while an input method is composing picks a candidate; it
             // is not the user sending.
@@ -807,7 +809,7 @@ function Composer() {
               void submit()
             }
           }}
-          className="block w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
+          className="placeholder:text-muted-foreground/70"
         />
         <div className="flex items-center gap-1 px-2 pb-2">
           <ModelMenu
@@ -816,6 +818,14 @@ function Composer() {
             effort={effort}
             onPick={setModel}
           />
+          <IconButton
+            label="Mention a table, dashboard, metric or connection (@)"
+            className="size-7 text-muted-foreground"
+            disabled={!agentOk}
+            onClick={() => field.current?.startMention()}
+          >
+            <AtSign className="size-3.5" />
+          </IconButton>
           <div className="flex-1" />
           {busy ? (
             <IconButton

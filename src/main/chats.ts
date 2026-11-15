@@ -123,6 +123,8 @@ const SYSTEM_PROMPT = `You are the data assistant inside Vey Data, a desktop dat
 
 The window has three parts: an explorer listing connections, tables and dashboards, a viewer showing the table, query or dashboard the user has open, and this chat. Each user message starts with a <viewer> block saying which connection and tab they are looking at — that is what "this table", "here" or an unqualified table name refers to. Use it as the default connection. If it names none and several connections exist, ask which one.
 
+When the user writes @name — @orders, @"Sales overview" — they picked that table, view, dashboard, metric or connection from a menu. The <viewer> block lists each one under "mentioned with @" with exactly what it is: use that schema, id or connection rather than searching for the name, and leave the @ out when you answer.
+
 How to work:
 - Know the business before the data. The first time a conversation touches a connection, call get_business_context: it holds the user's notes on what tables and codes mean, and the metrics they defined. When a question involves a defined metric, compute it with that metric's SQL — never with your own variant — and say which definition you used.
 - Follow the skills. The <viewer> block lists the skills that are switched on — instructions for a kind of task (building a dashboard, diagnosing a change, choosing a chart, and any the user wrote), each with when to use it. When a request matches one, call get_skill for its instructions before doing the task and follow them: the user may have rewritten them to how they want it done. Once read in a conversation, a skill need not be read again unless the user says it changed. Skills do not override the rules on changing data below, a read-only connection, or what the user asks in the message itself.
@@ -275,7 +277,71 @@ function describeContext(
   } else {
     lines.push("tab: none open")
   }
+  const mentioned = describeMentions(context.mentions ?? [], connections, library)
+  if (mentioned.length) {
+    lines.push(`mentioned with @ in this message:\n${mentioned.join("\n")}`)
+  }
   return `<viewer>\n${lines.join("\n")}\n</viewer>`
+}
+
+/**
+ * What each `@` in the message names, looked up again here rather than taken
+ * on the renderer's word: a dashboard renamed or a connection deleted since
+ * the menu was drawn is said to be gone, not described from a stale copy.
+ */
+export function describeMentions(
+  mentions: NonNullable<ViewerContext["mentions"]>,
+  connections: Connections,
+  library: Library
+): string[] {
+  const all = connections.list()
+  const lines: string[] = []
+  for (const { token, ref } of mentions.slice(0, 20)) {
+    const connection = all.find((item) => item.id === ref.connectionId)
+    const on = connection ? ` on connection ${connection.name} (id ${connection.id})` : ""
+    if (!connection) {
+      lines.push(`- ${token} → a ${ref.kind} on a connection that no longer exists`)
+      continue
+    }
+    switch (ref.kind) {
+      case "table":
+      case "view":
+        lines.push(`- ${token} → ${ref.kind} ${ref.schema ? `${ref.schema}.` : ""}${ref.name}${on}`)
+        break
+      case "dashboard": {
+        const dashboard = library.dashboards().find((item) => item.id === ref.id)
+        lines.push(
+          dashboard
+            ? `- ${token} → dashboard "${dashboard.title}" (id ${dashboard.id})${on}, tiles: ${
+                dashboard.tiles.map((tile) => tile.title).join(", ") || "none"
+              }`
+            : `- ${token} → a dashboard that has since been deleted`
+        )
+        break
+      }
+      case "metric": {
+        const metric = library
+          .knowledge(connection.id)
+          .metrics.find((item) => item.id === ref.id)
+        lines.push(
+          metric
+            ? `- ${token} → metric "${metric.name}"${on}${
+                metric.description ? `: ${metric.description}` : ""
+              }\n  computed as: ${metric.sql.slice(0, 1500)}`
+            : `- ${token} → a metric that has since been removed`
+        )
+        break
+      }
+      case "connection":
+        lines.push(
+          `- ${token} → connection ${connection.name} (id ${connection.id}, ${connection.engine}${
+            connection.access === "read_only" ? ", read-only" : ""
+          }) — use it for this request instead of the default`
+        )
+        break
+    }
+  }
+  return lines
 }
 
 /** The start of an answer as one line of plain text: no Markdown marks. */

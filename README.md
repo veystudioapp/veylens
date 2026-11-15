@@ -96,6 +96,14 @@ bun run package    # electron-builder → release/
   as it is written, read from the streamed partial JSON
   (`readPartialJson`, `shared/agent.ts`). The approval card takes its place
   with the input the CLI hands over, never the partial one.
+- **`@` mentions in the chat** — `@` (or the @ button) opens a menu of the
+  chat connection's tables and views, its dashboards and metrics, and the
+  other connections. A mention is plain text — `@orders`, `@"Sales overview"`,
+  `@archive.items` when two schemas share a name — tinted by a mirror behind
+  the textarea, so one typed by hand works too. On sending, each is resolved
+  (`findMentions`, `shared/mentions.ts`) and listed in the `<viewer>` block
+  with what it is — schema, dashboard id and tiles, a metric's SQL, a
+  connection's id — looked up again in main, so a deleted one is said to be gone.
 - **Audit log** (Settings › Data) — what was run, changed or refused
   through the app, newest first by day: statements from a SQL tab (reads
   and writes), saved row edits, the assistant's queries, statements, plans,
