@@ -198,7 +198,8 @@ export class MysqlDriver implements Driver {
   private readonly locked: boolean
   private readonly pool: mysql.Pool
 
-  constructor(config: ConnectionConfig) {
+  /** `overrides` is for Cloud SQL, which hands the pool a stream of its own. */
+  constructor(config: ConnectionConfig, overrides: mysql.PoolOptions = {}) {
     this.locked = config.access === "read_only"
     this.pool = mysql.createPool({
       host: config.host,
@@ -215,6 +216,7 @@ export class MysqlDriver implements Driver {
       rowsAsArray: true,
       // The types do not know the function form; the driver does.
       typeCast: typeCast as never,
+      ...overrides,
     })
     // Read-only to the server as well; see the Postgres driver.
     if (config.access === "read_only") {

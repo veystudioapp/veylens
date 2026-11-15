@@ -32,7 +32,7 @@ import {
 } from "../src/main/agent-tools"
 import { Connections } from "../src/main/connections"
 import { GuardedDriver } from "../src/main/db/guarded"
-import type { Driver } from "../src/main/db/types"
+import type { ConnectionConfig, Driver } from "../src/main/db/types"
 import {
   checkPermissions,
   classify,
@@ -874,6 +874,40 @@ await check("connections: a colour is kept, cleared, and never invented", () => 
   assert.equal(connections.save(shop.id, input).color, "red")
   assert.equal(connections.save(shop.id, { ...shop, color: "plaid" as never }).color, null)
   assert.equal(connections.save(shop.id, { ...shop, color: null }).color, null)
+})
+
+await check("connections: Cloud SQL needs no host, is checked, kept, and reaches the driver", async () => {
+  const configs: ConnectionConfig[] = []
+  const cloud = new Connections(
+    path.join(dir, "cloud-connections.json"),
+    { encrypt: () => null, decrypt: () => null },
+    (config) => {
+      configs.push(config)
+      return { ping: async () => "ok", close: async () => {} } as unknown as Driver
+    }
+  )
+  const base = { name: "Prod", engine: "postgres" as const, host: "", port: 5432, user: "me@example.com", database: "app", ssl: "off" as const }
+  assert.throws(() => cloud.save(null, base), /host is required/)
+  assert.throws(
+    () => cloud.save(null, { ...base, cloudSql: { instance: "just-a-name", ipType: "public", auth: "iam" } }),
+    /project:region:instance/
+  )
+  const saved = cloud.save(null, {
+    ...base,
+    cloudSql: { instance: " my-project:asia-northeast1:main ", ipType: "private", auth: "iam" },
+  })
+  assert.deepEqual(saved.cloudSql, { instance: "my-project:asia-northeast1:main", ipType: "private", auth: "iam" })
+  // An edit that does not mention it keeps it; null turns it off.
+  const { cloudSql: _unsaid, ...input } = saved
+  assert.deepEqual(cloud.save(saved.id, input).cloudSql, saved.cloudSql)
+  await cloud.driver(saved.id).ping()
+  assert.deepEqual(configs.at(-1)?.cloudSql, saved.cloudSql)
+  assert.equal(await cloud.test(saved.id, input), "ok")
+  assert.deepEqual(configs.at(-1)?.cloudSql, saved.cloudSql)
+  assert.throws(() => cloud.save(saved.id, { ...input, cloudSql: null }), /host is required/)
+  assert.equal(cloud.save(saved.id, { ...input, host: "db", cloudSql: null }).cloudSql, null)
+  // Saved before there was Cloud SQL: none.
+  assert.equal(connections.get(shop.id).cloudSql, null)
 })
 
 await check("access: a read-only connection refuses every write from the UI", async () => {

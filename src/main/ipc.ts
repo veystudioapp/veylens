@@ -1,5 +1,6 @@
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 
+import { addressOf } from "../shared/address"
 import { IPC, type AuditStatus, type DesktopApi } from "../shared/api"
 import { toolInfo } from "../shared/agent"
 import { describePermissions } from "../shared/permissions"
@@ -62,6 +63,11 @@ export function registerIpc({
       const saved = connections.save(id, input)
       const fields = (["name", "engine", "host", "port", "user", "database", "ssl", "access", "color"] as const)
         .filter((field) => before && before[field] !== saved[field])
+        .concat(
+          before && JSON.stringify(before.cloudSql) !== JSON.stringify(saved.cloudSql)
+            ? (["cloud SQL"] as never[])
+            : []
+        )
         .concat(input.password !== undefined && before ? (["password"] as never[]) : [])
       if (!before || fields.length) {
         audit.record({
@@ -70,7 +76,7 @@ export function registerIpc({
           status: "ok",
           summary: before
             ? `Edited connection ${saved.name}: ${fields.join(", ")}`
-            : `Added connection ${saved.name} (${saved.engine}, ${saved.host}:${saved.port}/${saved.database})`,
+            : `Added connection ${saved.name} (${saved.engine}, ${addressOf(saved)}/${saved.database})`,
           ...(before && fields.includes("access")
             ? { detail: `access: ${before.access} → ${saved.access}` }
             : {}),

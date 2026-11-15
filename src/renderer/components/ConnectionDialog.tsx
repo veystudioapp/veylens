@@ -4,6 +4,7 @@ import {
   CircleAlert,
   CircleCheck,
   ClipboardPaste,
+  Cloud,
   Eye,
   EyeOff,
   KeyRound,
@@ -12,6 +13,9 @@ import { useEffect, useState, type ComponentType, type ReactNode, type SVGProps 
 
 import {
   TONES,
+  type CloudSql,
+  type CloudSqlAuth,
+  type CloudSqlIpType,
   type Tone,
   type ConnectionInput,
   type Engine,
@@ -53,6 +57,29 @@ const SSL_MODES: Record<SslMode, string> = {
   off: "Off",
   require: "Require",
   verify: "Verify certificate",
+}
+
+/** How the server is reached: at a host and port, or through Google's Cloud
+ * SQL connector by the instance's connection name. */
+type Via = "host" | "cloudSql"
+
+const CLOUD_SQL_IP: Record<CloudSqlIpType, string> = {
+  public: "Public IP",
+  private: "Private IP",
+  psc: "Private Service Connect",
+}
+
+const CLOUD_SQL_AUTH: Record<CloudSqlAuth, string> = {
+  password: "Password",
+  iam: "IAM (Google account)",
+}
+
+/** Who the database user is when signing in as the Google account. */
+const IAM_USER: Record<Engine, string> = {
+  postgres:
+    "The user is the Google account's email; for a service account, its email without .gserviceaccount.com.",
+  mysql:
+    "The user is the Google account's email without the @ and domain; for a service account, its name before @.",
 }
 
 const ENGINES: {
@@ -181,6 +208,12 @@ export function ConnectionDialog({
   )
   const [database, setDatabase] = useState(existing?.database ?? "")
   const [ssl, setSsl] = useState<SslMode>(existing?.ssl ?? "off")
+  const [via, setVia] = useState<Via>(existing?.cloudSql ? "cloudSql" : "host")
+  const [instance, setInstance] = useState(existing?.cloudSql?.instance ?? "")
+  const [ipType, setIpType] = useState<CloudSqlIpType>(existing?.cloudSql?.ipType ?? "public")
+  const [auth, setAuth] = useState<CloudSqlAuth>(existing?.cloudSql?.auth ?? "password")
+  const cloud = via === "cloudSql"
+  const iam = cloud && auth === "iam"
   const [color, setColor] = useState<Tone | null>(existing?.color ?? null)
   const [probe, setProbe] = useState<Probe>({ state: "idle" })
   const [showPassword, setShowPassword] = useState(false)
@@ -190,20 +223,25 @@ export function ConnectionDialog({
   // A test says something about the settings it ran with: changed, it is gone.
   useEffect(() => {
     setProbe((current) => (current.state === "running" ? current : { state: "idle" }))
-  }, [engine, host, port, user, password, database, ssl])
+  }, [engine, host, port, user, password, database, ssl, via, instance, ipType, auth])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const cloudSql: CloudSql | null = cloud ? { instance: instance.trim(), ipType, auth } : null
+  /** What the name is when none is typed: where it goes. */
+  const where = cloud ? instance.trim().split(":").pop() || "" : host
   const input = (): ConnectionInput => ({
     engine,
-    name: name.trim() || `${host}${database ? `/${database}` : ""}`,
+    name: name.trim() || `${where}${database ? `/${database}` : ""}`,
     host,
     port: Number(port),
     user,
     database,
     ssl,
+    cloudSql,
     color,
-    ...(password === undefined ? {} : { password }),
+    // Signing in as the Google account, there is no password to keep.
+    ...(iam ? { password: "" } : password === undefined ? {} : { password }),
   })
 
   const pickEngine = (next: Engine) => {
@@ -223,6 +261,7 @@ export function ConnectionDialog({
       return
     }
     setEngine(parsed.engine)
+    setVia("host")
     setHost(parsed.host)
     setPort(parsed.port)
     if (parsed.user) setUser(parsed.user)
@@ -258,7 +297,7 @@ export function ConnectionDialog({
   }
 
   const Logo = ENGINE_OF[engine].logo
-  const summary = `${user || "…"}@${host || "…"}:${port || "…"}${database ? `/${database}` : ""}`
+  const summary = `${user || "…"}@${cloud ? `Cloud SQL ${instance || "…"}` : `${host || "…"}:${port || "…"}`}${database ? `/${database}` : ""}`
 
   return (
     <Dialog
@@ -364,6 +403,63 @@ export function ConnectionDialog({
             <legend className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
               Server
             </legend>
+            <div
+              role="radiogroup"
+              aria-label="Connect through"
+              className="-mt-1 flex rounded-md bg-muted p-0.5"
+            >
+              {(
+                [
+                  ["host", "Host & port", null],
+                  ["cloudSql", "Google Cloud SQL", <Cloud key="icon" />],
+                ] as const
+              ).map(([value, label, icon]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={via === value}
+                  onClick={() => setVia(value)}
+                  className={cn(
+                    "flex h-6 flex-1 items-center justify-center gap-1.5 rounded-[5px] px-2.5 text-xs whitespace-nowrap transition-colors [&_svg]:size-3.5",
+                    via === value
+                      ? "bg-background font-medium text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {icon}
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {cloud ? (
+              <div className="grid grid-cols-[1fr_168px] gap-3">
+                <Field id="connection-instance" label="Instance connection name">
+                  <Input
+                    id="connection-instance"
+                    value={instance}
+                    spellCheck={false}
+                    autoFocus={!existing && !pasting}
+                    placeholder="project:region:instance"
+                    onChange={(event) => setInstance(event.target.value)}
+                    className="font-mono text-[13px]"
+                  />
+                </Field>
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs font-medium text-foreground">IP address</Label>
+                  <SimpleSelect
+                    label="IP address"
+                    heading="IP address"
+                    size="default"
+                    className="w-full justify-between"
+                    value={ipType}
+                    items={CLOUD_SQL_IP}
+                    onChange={setIpType}
+                  />
+                </div>
+              </div>
+            ) : (
             <div className="grid grid-cols-[1fr_104px] gap-3">
               <Field id="connection-host" label="Host">
                 <Input
@@ -386,6 +482,7 @@ export function ConnectionDialog({
                 />
               </Field>
             </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <Field id="connection-user" label="User">
@@ -403,11 +500,14 @@ export function ConnectionDialog({
                   <Input
                     id="connection-password"
                     type={showPassword ? "text" : "password"}
-                    value={password ?? ""}
+                    value={iam ? "" : (password ?? "")}
+                    disabled={iam}
                     placeholder={
-                      password === undefined && existing?.hasPassword
-                        ? "Saved — unchanged"
-                        : "None"
+                      iam
+                        ? "Not used with IAM"
+                        : password === undefined && existing?.hasPassword
+                          ? "Saved — unchanged"
+                          : "None"
                     }
                     onChange={(event) => setPassword(event.target.value)}
                     className="pr-8 pl-8 font-mono text-[13px]"
@@ -416,7 +516,7 @@ export function ConnectionDialog({
                     type="button"
                     aria-label={showPassword ? "Hide password" : "Show password"}
                     title={showPassword ? "Hide password" : "Show password"}
-                    disabled={!password}
+                    disabled={iam || !password}
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:opacity-40"
                   >
@@ -437,21 +537,47 @@ export function ConnectionDialog({
                   className="font-mono text-[13px]"
                 />
               </Field>
-              <div className="flex flex-col gap-1.5">
-                <Label className="text-xs font-medium text-foreground">SSL</Label>
-                <SimpleSelect
-                  label="SSL"
-                  size="default"
-                  className="w-full"
-                  value={ssl}
-                  items={SSL_MODES}
-                  onChange={setSsl}
-                />
-              </div>
+              {cloud ? (
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs font-medium text-foreground">Sign in with</Label>
+                  <SimpleSelect
+                    label="Sign in with"
+                    heading="Sign in with"
+                    size="default"
+                    className="w-full justify-between"
+                    value={auth}
+                    items={CLOUD_SQL_AUTH}
+                    onChange={setAuth}
+                  />
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs font-medium text-foreground">SSL</Label>
+                  <SimpleSelect
+                    label="SSL"
+                    heading="SSL"
+                    size="default"
+                    className="w-full justify-between"
+                    value={ssl}
+                    items={SSL_MODES}
+                    onChange={setSsl}
+                  />
+                </div>
+              )}
             </div>
-            <p className="-mt-1 text-[11px] text-muted-foreground">
-              The password is kept in this machine&apos;s keychain, never shown again.
-            </p>
+            {cloud ? (
+              <p className="-mt-1 text-[11px] text-muted-foreground">
+                Reached through Google&apos;s Cloud SQL connector, which encrypts the
+                connection itself. It signs in to Google as this machine&apos;s
+                default credentials (<code>gcloud auth application-default login</code>);
+                that account needs the Cloud SQL Client role.
+                {iam ? ` ${IAM_USER[engine]}` : " The password is kept in this machine's keychain."}
+              </p>
+            ) : (
+              <p className="-mt-1 text-[11px] text-muted-foreground">
+                The password is kept in this machine&apos;s keychain, never shown again.
+              </p>
+            )}
           </fieldset>
 
           <fieldset className="flex flex-col gap-3">
@@ -464,7 +590,7 @@ export function ConnectionDialog({
                 autoFocus={!!existing}
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder={`${host || "host"}${database ? `/${database}` : ""}`}
+                placeholder={`${where || (cloud ? "instance" : "host")}${database ? `/${database}` : ""}`}
               />
             </Field>
 
@@ -547,7 +673,7 @@ export function ConnectionDialog({
           <Button
             variant="outline"
             onClick={test}
-            disabled={probe.state === "running" || !host.trim()}
+            disabled={probe.state === "running" || !(cloud ? instance : host).trim()}
           >
             {probe.state === "running" && <Spinner className="size-3.5" />}
             Test

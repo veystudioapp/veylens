@@ -4,8 +4,11 @@ import path from "node:path"
 
 import {
   ACCESS_MODES,
+  CLOUD_SQL_AUTHS,
+  CLOUD_SQL_IP_TYPES,
   TONES,
   type AccessMode,
+  type CloudSql,
   type Connection,
   type ConnectionInput,
   type Engine,
@@ -27,17 +30,49 @@ export type Secrets = {
 
 type StoredPassword = { enc: string } | { plain: string } | null
 
-type Stored = Omit<Connection, "hasPassword" | "permissions"> & {
+type Stored = Omit<Connection, "hasPassword" | "permissions" | "cloudSql"> & {
   password: StoredPassword
   /** Saved before there were permissions: none, the defaults. */
   permissions?: Permissions
+  /** Saved before Cloud SQL: none. */
+  cloudSql?: CloudSql | null
 }
 
 const ENGINES: Engine[] = ["postgres", "mysql"]
 
-function validate(input: ConnectionInput): void {
+/** `project:region:instance`; a domain-scoped project adds `example.com:`. */
+const INSTANCE_NAME = /^[^:\s]+(:[^:\s]+){2,3}$/
+
+/** The Cloud SQL settings as given, trimmed; null for none. Throws, saying
+ * what is wrong, when they do not make sense. */
+function checkCloudSql(cloudSql: CloudSql | null | undefined): CloudSql | null {
+  if (!cloudSql) return null
+  const instance = cloudSql.instance.trim()
+  if (!INSTANCE_NAME.test(instance)) {
+    throw new Error(
+      "The instance connection name looks like project:region:instance — copy it from the instance's page in the Cloud console."
+    )
+  }
+  return {
+    instance,
+    ipType: CLOUD_SQL_IP_TYPES.includes(cloudSql.ipType) ? cloudSql.ipType : "public",
+    auth: CLOUD_SQL_AUTHS.includes(cloudSql.auth) ? cloudSql.auth : "password",
+  }
+}
+
+/** The Cloud SQL settings a save or test is for: those given, or — left out
+ * — the stored ones. */
+function cloudSqlOf(input: ConnectionInput, existing: Stored | null): CloudSql | null {
+  return input.cloudSql === undefined
+    ? (existing?.cloudSql ?? null)
+    : checkCloudSql(input.cloudSql)
+}
+
+function validate(input: ConnectionInput, cloudSql: CloudSql | null): void {
   if (!ENGINES.includes(input.engine)) throw new Error("Pick an engine.")
   if (!input.name.trim()) throw new Error("Give the connection a name.")
+  // Cloud SQL's connector finds the address itself.
+  if (cloudSql) return
   if (!input.host.trim()) throw new Error("A host is required.")
   if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) {
     throw new Error("The port must be a number between 1 and 65535.")
@@ -103,6 +138,7 @@ export class Connections {
       access: rest.access ?? "read_write",
       // Saved before connections had colours.
       color: rest.color ?? null,
+      cloudSql: rest.cloudSql ?? null,
       permissions: checkPermissions(rest.permissions),
       hasPassword: password !== null,
     }
@@ -123,8 +159,9 @@ export class Connections {
   }
 
   save(id: string | null, input: ConnectionInput): Connection {
-    validate(input)
     const existing = id ? this.find(id) : null
+    const cloudSql = cloudSqlOf(input, existing)
+    validate(input, cloudSql)
     const next: Stored = {
       id: existing?.id ?? randomUUID(),
       name: input.name.trim(),
@@ -134,6 +171,7 @@ export class Connections {
       user: input.user.trim(),
       database: input.database.trim(),
       ssl: input.ssl,
+      cloudSql,
       access: ACCESS_MODES.includes(input.access as AccessMode)
         ? input.access!
         : (existing?.access ?? "read_write"),
@@ -182,6 +220,7 @@ export class Connections {
       password: this.open(stored.password),
       database: stored.database,
       ssl: stored.ssl,
+      cloudSql: stored.cloudSql ?? null,
       access: stored.access ?? "read_write",
     }
   }
@@ -203,10 +242,11 @@ export class Connections {
 
   /** Tries the settings in a dialog without saving them. */
   async test(id: string | null, input: ConnectionInput): Promise<string> {
-    validate(input)
-    const password =
-      input.password ?? (id ? this.open(this.find(id).password) : "")
-    const driver = this.create({ ...input, password })
+    const existing = id ? this.find(id) : null
+    const cloudSql = cloudSqlOf(input, existing)
+    validate(input, cloudSql)
+    const password = input.password ?? (existing ? this.open(existing.password) : "")
+    const driver = this.create({ ...input, password, cloudSql })
     try {
       return await driver.ping()
     } finally {

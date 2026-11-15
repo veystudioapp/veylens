@@ -2,6 +2,7 @@ import type {
   AccessMode,
   Cell,
   ChangeSet,
+  CloudSql,
   Engine,
   PlanStepResult,
   QueryResult,
@@ -23,6 +24,8 @@ export type ConnectionConfig = {
   password: string
   database: string
   ssl: SslMode
+  /** Reached through Google's Cloud SQL connector, not `host` and `port`. */
+  cloudSql?: CloudSql | null
   /** `read_only` opens every session read-only, on the server's side too. */
   access?: AccessMode
 }

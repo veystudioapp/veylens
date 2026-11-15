@@ -22,8 +22,16 @@ const shared = {
   format: "cjs",
   outExtension: { ".js": ".cjs" },
   // The database drivers carry dynamic requires esbuild cannot follow, so they
-  // stay real packages resolved from node_modules.
-  external: ["electron", "pg", "pg-cursor", "mysql2", "mysql2/promise"],
+  // stay real packages resolved from node_modules — Cloud SQL's connector
+  // too, with Google's auth library beneath it.
+  external: [
+    "electron",
+    "pg",
+    "pg-cursor",
+    "mysql2",
+    "mysql2/promise",
+    "@google-cloud/cloud-sql-connector",
+  ],
   sourcemap: true,
   minify: values.minify,
   logLevel: "info",

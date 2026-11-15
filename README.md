@@ -20,6 +20,15 @@ The chat runs the `claude` CLI already on your machine, signed in as you
 (install it and run `claude` once to log in). `CLAUDE_BIN` points it at a
 custom install. Without it the explorer and viewer still work.
 
+Google Cloud SQL works without the Cloud SQL Auth Proxy: in the connection
+dialog pick **Google Cloud SQL** and give the instance connection name
+(`project:region:instance`). Google's connector
+(`@google-cloud/cloud-sql-connector`) finds the address and encrypts the
+connection; it signs in to Google with this machine's Application Default
+Credentials (`gcloud auth application-default login`, an account with the
+Cloud SQL Client role). The database user signs in with a password, or as
+that Google account with **IAM**.
+
 No database handy? `bun run demo:pg` starts a small sample Postgres on
 `127.0.0.1:54329` (user `postgres`, password `postgres`, database `postgres`,
 SSL off).

@@ -130,7 +130,8 @@ export class PostgresDriver implements Driver {
   private readonly pool: pg.Pool
   private typesOnce: Promise<Map<number, TypeInfo>> | null = null
 
-  /** `overrides` is for a test, which hands the pool a stream of its own. */
+  /** `overrides` is for a test or Cloud SQL, which hand the pool a stream of
+   * their own. */
   constructor(config: ConnectionConfig, overrides: pg.PoolConfig = {}) {
     this.locked = config.access === "read_only"
     this.pool = new pg.Pool({

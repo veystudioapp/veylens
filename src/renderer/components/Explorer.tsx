@@ -19,6 +19,7 @@ import {
 } from "lucide-react"
 import { useEffect, useState, type ReactNode } from "react"
 
+import { addressOf } from "@shared/address"
 import type { Connection, Tone } from "@shared/api"
 
 import { Button } from "@/components/ui/button"
@@ -205,7 +206,7 @@ function ConnectionNode({
         icon={<Database />}
         tone={connectionTone(connection)}
         label={connection.name}
-        title={`${ENGINE_LABEL[connection.engine]} · ${connection.user}@${connection.host}:${connection.port}${connection.database ? `/${connection.database}` : ""} · ${ACCESS_LABEL[connection.access]}`}
+        title={`${ENGINE_LABEL[connection.engine]} · ${connection.user}@${addressOf(connection)}${connection.database ? `/${connection.database}` : ""} · ${ACCESS_LABEL[connection.access]}`}
         onClick={() => toggle(key)}
         trailing={
           tree?.status === "loading" ? (

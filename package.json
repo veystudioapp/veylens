@@ -16,6 +16,7 @@
   },
   "//dependencies": "Only what the packaged app loads from node_modules at runtime: the database drivers stay esbuild externals (dynamic requires). Everything else is bundled by esbuild (main) or Vite (renderer) and lives below.",
   "dependencies": {
+    "@google-cloud/cloud-sql-connector": "^1.13.0",
     "mysql2": "^3.11.0",
     "pg": "^8.13.0",
     "pg-cursor": "^2.12.0"

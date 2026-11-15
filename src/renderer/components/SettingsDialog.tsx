@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 import { useEffect, useState, type ReactNode } from "react"
 
+import { addressOf } from "@shared/address"
 import {
   TOOL_CATALOG,
   effectiveToolMode,
@@ -1009,7 +1010,7 @@ function ConnectionPermissions({ connection }: { connection: Connection }) {
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13px] font-medium">{connection.name}</span>
             <span className="block truncate text-[11px] text-muted-foreground">
-              {ENGINE_LABEL[connection.engine]} · {connection.user}@{connection.host}:{connection.port}
+              {ENGINE_LABEL[connection.engine]} · {connection.user}@{addressOf(connection)}
               {connection.database ? `/${connection.database}` : ""}
             </span>
           </span>

@@ -18,6 +18,7 @@ import {
   type TreeSchema,
   type ViewerTarget,
 } from "../shared/api"
+import { addressOf } from "../shared/address"
 import { chartProblem } from "../shared/chart"
 import {
   bindParameters,
@@ -406,7 +407,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
             all
               .map(
                 (item) =>
-                  `- ${item.name} (id ${item.id}): ${item.engine}, database "${item.database}" on ${item.host}:${item.port}${ACCESS_NOTE[item.access]}`
+                  `- ${item.name} (id ${item.id}): ${item.engine}, database "${item.database}" on ${addressOf(item)}${ACCESS_NOTE[item.access]}`
               )
               .join("\n")
           )

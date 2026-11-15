@@ -19,6 +19,26 @@ export type Engine = "postgres" | "mysql"
 /** `require` encrypts without checking the certificate; `verify` checks it. */
 export type SslMode = "off" | "require" | "verify"
 
+export const CLOUD_SQL_IP_TYPES = ["public", "private", "psc"] as const
+export type CloudSqlIpType = (typeof CLOUD_SQL_IP_TYPES)[number]
+
+export const CLOUD_SQL_AUTHS = ["password", "iam"] as const
+export type CloudSqlAuth = (typeof CLOUD_SQL_AUTHS)[number]
+
+/**
+ * A Google Cloud SQL instance reached through Google's connector instead of
+ * a host and port: the connector finds the address, encrypts the connection
+ * with certificates of its own and signs in to Google with the machine's
+ * Application Default Credentials (`gcloud auth application-default login`).
+ * `iam` signs in to the database as that Google account, without a password.
+ */
+export type CloudSql = {
+  /** `project:region:instance`, as the console shows it. */
+  instance: string
+  ipType: CloudSqlIpType
+  auth: CloudSqlAuth
+}
+
 /**
  * What this app lets anyone — you in a table or a SQL tab, or the assistant —
  * do through a connection, whatever the database user itself may do.
@@ -92,6 +112,8 @@ export type Connection = {
   user: string
   database: string
   ssl: SslMode
+  /** Set, the host, port and SSL are not used: the connector reaches it. */
+  cloudSql: CloudSql | null
   access: AccessMode
   permissions: Permissions
   /** Picked by the user — red for production, say; null follows the engine. */
@@ -102,10 +124,12 @@ export type Connection = {
 
 export type ConnectionInput = Omit<
   Connection,
-  "id" | "hasPassword" | "access" | "color" | "permissions"
+  "id" | "hasPassword" | "access" | "color" | "permissions" | "cloudSql"
 > & {
   /** `undefined` keeps the stored colour. */
   color?: Tone | null
+  /** `undefined` keeps the stored setting; null is a plain host and port. */
+  cloudSql?: CloudSql | null
   /** `undefined` keeps the stored password; a string (even empty) replaces it. */
   password?: string
   /** Read & write when not said. */

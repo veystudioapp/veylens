@@ -31,6 +31,7 @@ import {
   toneColor,
   toneStyle,
 } from "@/lib/tones"
+import { addressOf } from "@shared/address"
 import type { Tone } from "@shared/api"
 import { cn } from "@/lib/utils"
 
@@ -349,7 +350,7 @@ function StartPage() {
             </h1>
             <p className="truncate text-xs text-muted-foreground">
               {connection.engine === "postgres" ? "PostgreSQL" : "MySQL"} ·{" "}
-              {connection.user}@{connection.host}
+              {connection.user}@{addressOf(connection)}
               {connection.database ? `/${connection.database}` : ""}
             </p>
           </div>
