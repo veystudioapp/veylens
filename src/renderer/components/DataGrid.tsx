@@ -94,6 +94,7 @@ import {
 import { toneColor, toneStyle } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 
+import { DateCellEditor, dateEditorKind, parseDateValue } from "./date-cell-editor"
 import { RecordDialog } from "./RecordDialog"
 
 const KIND_ICON: Record<ColumnKind, typeof Hash> = {
@@ -1051,17 +1052,32 @@ export function DataGrid({
           const format = formats[index] ?? { kind: "plain" }
 
           if (isEditing && editing) {
+            const commit = (next: Cell) => {
+              setActive(null)
+              editing.onChange(target, column.name, next)
+            }
+            // A date with a calendar under it; one that does not read as a
+            // date (`infinity`) is still edited as text.
+            const dateKind = dateEditorKind(column)
+            const asDate = dateKind && (value == null || value === "" || !!parseDateValue(value))
             return (
               <td key={column.name} className="is-editing">
-                <CellEditor
-                  initial={value}
-                  nullable={column.nullable ?? true}
-                  onCancel={() => setActive(null)}
-                  onCommit={(next) => {
-                    setActive(null)
-                    editing.onChange(target, column.name, next)
-                  }}
-                />
+                {asDate ? (
+                  <DateCellEditor
+                    initial={value}
+                    withTime={dateKind === "datetime"}
+                    nullable={column.nullable ?? true}
+                    onCancel={() => setActive(null)}
+                    onCommit={commit}
+                  />
+                ) : (
+                  <CellEditor
+                    initial={value}
+                    nullable={column.nullable ?? true}
+                    onCancel={() => setActive(null)}
+                    onCommit={commit}
+                  />
+                )}
               </td>
             )
           }
