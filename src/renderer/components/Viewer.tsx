@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react"
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -398,7 +399,14 @@ function TabButton({
   )
 }
 
-function Panel({ tab, active }: { tab: Tab; active: boolean }) {
+/**
+ * Every open tab stays mounted, hidden but for the active one, and a table
+ * tab draws hundreds of rows. Memoised on `tab` (the store's own object) and
+ * `active`, so a render above — a dialog opening, the panels resizing — does
+ * not draw every open grid again; each view still re-renders on its own
+ * store subscriptions.
+ */
+const Panel = memo(function Panel({ tab, active }: { tab: Tab; active: boolean }) {
   switch (tab.kind) {
     case "table":
       return <TableView tab={tab} active={active} />
@@ -409,7 +417,7 @@ function Panel({ tab, active }: { tab: Tab; active: boolean }) {
     case "knowledge":
       return <KnowledgeView tab={tab} active={active} />
   }
-}
+})
 
 /**
  * What the viewer shows with no tab open: where to start on the connection

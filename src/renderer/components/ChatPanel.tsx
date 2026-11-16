@@ -21,6 +21,7 @@ import {
   TriangleAlert,
 } from "lucide-react"
 import {
+  memo,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -718,7 +719,12 @@ function ToolRow({ item, chatId }: { item: ToolItem; chatId: string }) {
   )
 }
 
-function Item({ item, chatId }: { item: ChatItem; chatId: string }) {
+/**
+ * Memoised on the item: the store replaces only the item that changed, so a
+ * streamed token redraws the answer being written and not every chart, tool
+ * row and answer above it.
+ */
+const Item = memo(function Item({ item, chatId }: { item: ChatItem; chatId: string }) {
   switch (item.kind) {
     case "user":
       return (
@@ -736,7 +742,7 @@ function Item({ item, chatId }: { item: ChatItem; chatId: string }) {
     case "chart":
       return <ChartCard item={item} />
   }
-}
+})
 
 /** Put in the field, not sent: the parts in brackets are the user's to fill. */
 const DIAGNOSE =
@@ -754,7 +760,10 @@ const carriesFiles = (event: DragEvent) =>
   [...event.dataTransfer.types].includes("Files")
 
 function Composer({ ref }: { ref?: Ref<ComposerHandle> }) {
-  const chat = useStore((state) => state.chat)
+  // Not the chat itself: that changes with every streamed token, and the
+  // field would be drawn again with each one.
+  const chatId = useStore((state) => state.chat?.id ?? null)
+  const busy = useStore((state) => state.chat?.busy ?? false)
   const draft = useStore((state) => state.draft)
   const setDraft = useStore((state) => state.setDraft)
   const send = useStore((state) => state.send)
@@ -774,7 +783,6 @@ function Composer({ ref }: { ref?: Ref<ComposerHandle> }) {
   const [text, setText] = useState("")
   const [error, setError] = useState<string | null>(null)
   const field = useRef<MentionFieldHandle>(null)
-  const busy = chat?.busy ?? false
   /**
    * Every picture added to this draft, in the order it was added: `[Image #n]`
    * is `images[n - 1]`. Never shortened while the draft lives, so a number
@@ -855,7 +863,7 @@ function Composer({ ref }: { ref?: Ref<ComposerHandle> }) {
     const draftText = text
     const draftImages = images
     const message = attachedIn(text.trim(), images)
-    if (!message.text || busy || !chat) return
+    if (!message.text || busy || !chatId) return
     setText("")
     setImages(NO_IMAGES)
     setError(null)
@@ -951,7 +959,7 @@ function Composer({ ref }: { ref?: Ref<ComposerHandle> }) {
               label="Stop"
               variant="outline"
               className="size-7 rounded-full"
-              onClick={() => chat && void window.veylens.stopChat(chat.id)}
+              onClick={() => chatId && void window.veylens.stopChat(chatId)}
             >
               <Square className="size-2.5 fill-current" />
             </IconButton>
