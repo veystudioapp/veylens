@@ -36,7 +36,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { judgeChanges, objectAccess } from "@shared/permissions"
 
 import { errorMessage, useStore, type Tab } from "@/lib/store"
-import { referencesOf, useFormatValues, useRowHeight } from "@/lib/cell-format"
+import { referencesOf, splitValues, useFormatValues, useRowHeight } from "@/lib/cell-format"
+import { quoteName } from "@/lib/sql-complete"
 import { cn } from "@/lib/utils"
 
 import { confirm } from "./confirm"
@@ -146,6 +147,10 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
       state.connections.find((item) => item.id === tab.connectionId)?.access ??
       "read_write"
   )
+  const engine = useStore(
+    (state) =>
+      state.connections.find((item) => item.id === tab.connectionId)?.engine ?? "postgres"
+  )
   const connectionName = useStore(
     (state) => state.connections.find((item) => item.id === tab.connectionId)?.name
   )
@@ -202,10 +207,39 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
     })
 
   const tableKey = `${tab.connectionId}/${tab.schema}.${tab.table}`
+
+  /**
+   * Every value a column holds, for a select's options: an ENUM's are in its
+   * type; anything else is asked of the database, read-only.
+   */
+  const suggestValues = async (column: string, multi: boolean): Promise<string[]> => {
+    const type = info?.columns.find((item) => item.name === column)?.type ?? ""
+    const listed = /^enum\((.*)\)$/i.exec(type)
+    if (listed) {
+      return [...listed[1]!.matchAll(/'((?:[^']|'')*)'/g)].map((match) =>
+        match[1]!.replaceAll("''", "'")
+      )
+    }
+    const name = quoteName(column, engine)
+    const result = await window.veylens.runQuery(
+      tab.connectionId,
+      `SELECT DISTINCT ${name} FROM ${quoteName(tab.schema, engine)}.${quoteName(tab.table, engine)} WHERE ${name} IS NOT NULL ORDER BY 1 LIMIT 200`,
+      true
+    )
+    const values = result.rows
+      .map((row) => row[0])
+      .filter((value): value is string => typeof value === "string" && value !== "")
+    return multi ? [...new Set(values.flatMap(splitValues))] : values
+  }
   const [hidden, setHidden] = useHiddenColumns(tableKey)
 
   const [fields, setFields] = useState<TableFields>({ fields: {}, displayColumn: null })
-  const [settingsOf, setSettingsOf] = useState<string | null>(null)
+  // The column whose field settings are open, and its header they hang from.
+  const [settingsFor, setSettingsFor] = useState<{
+    column: string
+    header: HTMLElement | null
+  } | null>(null)
+  const settingsOf = settingsFor?.column ?? null
   useEffect(() => {
     let live = true
     void window.veylens
@@ -527,7 +561,7 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
               })
             }
             fields={fields}
-            onEditField={setSettingsOf}
+            onEditField={(column, header) => setSettingsFor({ column, header })}
             editing={editing}
           />
         ) : (
@@ -587,6 +621,7 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
       {settingsOf && data && (
         <FieldSettingsDialog
           column={gridColumns.find((column) => column.name === settingsOf)!}
+          header={settingsFor?.header ?? null}
           current={fields.fields[settingsOf] ?? null}
           samples={data.rows.map(
             (row) => row[data.columns.findIndex((column) => column.name === settingsOf)] ?? null
@@ -601,7 +636,8 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
               )
             )
           }
-          onClose={() => setSettingsOf(null)}
+          onSuggest={(multi) => suggestValues(settingsOf, multi)}
+          onClose={() => setSettingsFor(null)}
         />
       )}
     </div>

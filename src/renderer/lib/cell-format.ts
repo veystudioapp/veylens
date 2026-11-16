@@ -30,7 +30,7 @@ export type CellFormat =
   /** An address of a picture: a thumbnail. */
   | { kind: "image" }
   /** A short value from a small set: a coloured tag per value. */
-  | { kind: "tag"; colors?: Record<string, Tone> }
+  | { kind: "tag"; colors?: Record<string, Tone>; plain?: boolean }
   /** The text as printed — chosen, so not even a date is split. */
   | { kind: "text" }
   | {
@@ -60,7 +60,14 @@ export type CellFormat =
       timezone: string
     }
   | { kind: "duration"; unit: "seconds" | "minutes"; format: DurationFormat }
-  | { kind: "multitag"; colors?: Record<string, Tone> }
+  | {
+      kind: "multitag"
+      colors?: Record<string, Tone>
+      plain?: boolean
+      /** The order a cell's tags are drawn in; others follow as written. */
+      order?: string[]
+      alphabetize?: boolean
+    }
   | { kind: "check"; icon: CheckIcon; color: Tone }
   | { kind: "rating"; max: number; icon: RatingIcon; color: Tone }
   | { kind: "progress"; max: number }
@@ -210,9 +217,15 @@ export function formatOfDisplay(display: FieldDisplay): CellFormat {
     case "text":
       return { kind: "text" }
     case "select":
-      return { kind: "tag", colors: display.colors }
+      return { kind: "tag", colors: display.colors, plain: display.plain }
     case "multiselect":
-      return { kind: "multitag", colors: display.colors }
+      return {
+        kind: "multitag",
+        colors: display.colors,
+        plain: display.plain,
+        order: display.options,
+        alphabetize: display.alphabetize,
+      }
     case "checkbox":
       return { kind: "check", icon: display.icon, color: display.color }
     case "email":
@@ -648,6 +661,19 @@ export function splitValues(value: string): string[] {
     .split(",")
     .map((item) => item.trim().replace(/^"(.*)"$/, "$1"))
     .filter(Boolean)
+}
+
+/** A select's values in the field's order: A–Z, or as its options are put. */
+export function orderTags(
+  items: string[],
+  order: readonly string[] | undefined,
+  alphabetize: boolean | undefined
+): string[] {
+  if (alphabetize) return [...items].sort((a, b) => a.localeCompare(b))
+  if (!order?.length) return items
+  const rank = new Map(order.map((item, index) => [item, index]))
+  const last = order.length
+  return [...items].sort((a, b) => (rank.get(a) ?? last) - (rank.get(b) ?? last))
 }
 
 /** A colour the cell can paint: hex, rgb(), hsl() or oklch(). */

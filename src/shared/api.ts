@@ -514,6 +514,21 @@ export const CHECK_ICONS = ["check", "square", "circle-check", "star", "heart", 
 
 export type CheckIcon = (typeof CHECK_ICONS)[number]
 
+/** A single or multi select's values: their colours, and their order. */
+export type SelectOptions = {
+  colors: Record<string, Tone>
+  /**
+   * The values known to the field, in the order put — those on a page, those
+   * added by hand or suggested from the column. A multi select's tags are
+   * drawn in this order.
+   */
+  options?: string[]
+  /** Colour-coding off: every tag is drawn in the same grey. */
+  plain?: boolean
+  /** Values A–Z, in the list and in a multi select's cell. */
+  alphabetize?: boolean
+}
+
 export type FieldDisplay =
   /** The text as printed, nothing read into it. */
   | { type: "text" }
@@ -549,9 +564,9 @@ export type FieldDisplay =
     }
   | { type: "duration"; unit: "seconds" | "minutes"; format: DurationFormat }
   /** A tag per value; values without a colour get one of their own. */
-  | { type: "select"; colors: Record<string, Tone> }
+  | ({ type: "select" } & SelectOptions)
   /** Several tags in one value: `a, b`, `{a,b}` or `["a","b"]`. */
-  | { type: "multiselect"; colors: Record<string, Tone> }
+  | ({ type: "multiselect" } & SelectOptions)
   | { type: "checkbox"; icon: CheckIcon; color: Tone }
   | { type: "rating"; max: number; icon: RatingIcon; color: Tone }
   | { type: "progress"; max: number }

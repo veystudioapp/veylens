@@ -57,6 +57,7 @@ import {
   splitValues,
   groupDigits,
   referencesOf,
+  orderTags,
   tagTone,
 } from "../src/renderer/lib/cell-format"
 import { applyUserChanges, runUserQuery } from "../src/main/user-queries"
@@ -1330,6 +1331,23 @@ await check("field settings: checked, kept per table, migrated, and cleared", ()
     () => library.setFieldSettings(shop.id, ref, "x", { display: { type: "script" } as never }),
     /not a way/
   )
+  // A select's options keep their order, once each; its flags only when on.
+  assert.deepEqual(
+    checkFieldDisplay({
+      type: "multiselect",
+      colors: { b: "blue" },
+      options: ["b", "a", "b", "", 7 as never],
+      plain: true,
+      alphabetize: false,
+    }),
+    { type: "multiselect", colors: { b: "blue" }, options: ["b", "a"], plain: true }
+  )
+  assert.throws(
+    () => checkFieldDisplay({ type: "select", colors: {}, options: "a,b" as never }),
+    /a list/
+  )
+  assert.deepEqual(orderTags(["c", "a", "b"], ["b", "a"], false), ["b", "a", "c"])
+  assert.deepEqual(orderTags(["c", "a", "b"], ["b", "a"], true), ["a", "b", "c"])
   // Unknown options fall back to NocoDB's defaults rather than being stored.
   assert.deepEqual(
     checkFieldDisplay({ type: "checkbox", icon: "skull", color: "plaid" } as never),

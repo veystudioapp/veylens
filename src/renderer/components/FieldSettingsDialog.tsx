@@ -1,14 +1,20 @@
+import { Popover } from "@base-ui/react/popover"
 import {
   Check,
+  ChevronDown,
   Circle,
   CircleCheck,
   Flag,
   Flame,
+  GripVertical,
   Heart,
+  Plus,
   Shapes,
+  Sparkles,
   Square,
   Star,
   ThumbsUp,
+  X,
 } from "lucide-react"
 import { useMemo, useState, type ReactNode } from "react"
 
@@ -33,14 +39,15 @@ import {
 } from "@shared/api"
 
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select as SelectRoot,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -59,6 +66,7 @@ import { cn } from "@/lib/utils"
 import { CellText, FieldIcon, type GridColumn } from "./DataGrid"
 import { SimpleSelect } from "./simple-select"
 import { ErrorNote } from "./state-view"
+import { Switch } from "./switch"
 
 // NocoDB's names for its field types, and what each is for.
 const TYPE_LABEL: Record<FieldDisplayType, string> = {
@@ -317,66 +325,311 @@ function IconPicker<Icon extends RatingIcon | CheckIcon>({
   )
 }
 
-/** Each value's colour, for a single or multi select. */
-function ValueColours({
-  values,
-  colors,
+/** A value's colour: a tinted square that opens the colours to pick from. */
+function ToneSwatch({
+  value,
+  tone,
   onChange,
 }: {
-  values: string[]
-  colors: Record<string, Tone>
-  onChange: (colors: Record<string, Tone>) => void
+  value: string
+  tone: Tone
+  onChange: (tone: Tone) => void
 }) {
-  if (values.length === 0) {
-    return <p className="text-xs text-muted-foreground">No values on this page.</p>
-  }
+  const [open, setOpen] = useState(false)
+  const colour = toneColor(tone)
   return (
-    <div className="flex flex-col divide-y rounded-lg border">
-      {values.map((value) => {
-        const tone = colors[value] ?? tagTone(value)
-        return (
-          <div key={value} className="flex items-center gap-3 px-3 py-1.5">
-            <span className="min-w-0 flex-1 truncate">
-              <CellText
-                value={value}
-                kind="text"
-                format={{ kind: "tag", colors: { [value]: tone } }}
-                raw={false}
-              />
-            </span>
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger
+        aria-label={`Colour of ${value}`}
+        className="flex size-6 shrink-0 items-center justify-center rounded-md transition-[filter] hover:brightness-95"
+        style={{
+          background: `color-mix(in oklch, ${colour} 22%, transparent)`,
+          color: `color-mix(in oklch, ${colour} 70%, var(--foreground))`,
+        }}
+      >
+        <ChevronDown className="size-3" />
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner side="bottom" align="start" sideOffset={4} className="isolate z-50">
+          <Popover.Popup className="rounded-lg bg-popover p-2.5 shadow-md ring-1 ring-foreground/10 outline-none">
             <TonePicker
               label={`Colour of ${value}`}
               value={tone}
-              onChange={(next) => onChange({ ...colors, [value]: next })}
+              onChange={(next) => {
+                onChange(next)
+                setOpen(false)
+              }}
             />
-          </div>
-        )
-      })}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  )
+}
+
+type SelectDisplay = Extract<FieldDisplay, { type: "select" | "multiselect" }>
+
+/**
+ * A select's values, each with its colour: those kept with the field first,
+ * in their order, then any new on the page. Dragged into order, added by hand,
+ * or suggested from the whole column.
+ */
+function SelectOptionsEditor({
+  display,
+  seen,
+  onChange,
+  onSuggest,
+}: {
+  display: SelectDisplay
+  /** The distinct values on the page. */
+  seen: string[]
+  onChange: (display: SelectDisplay) => void
+  /** The column's values, from the database. */
+  onSuggest?: () => Promise<string[]>
+}) {
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState("")
+  const [dragging, setDragging] = useState<string | null>(null)
+  const [over, setOver] = useState<string | null>(null)
+  const [suggesting, setSuggesting] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  const listed = useMemo(
+    () => [...new Set([...(display.options ?? []), ...Object.keys(display.colors), ...seen])],
+    [display.options, display.colors, seen]
+  )
+  const shown = display.alphabetize
+    ? [...listed].sort((a, b) => a.localeCompare(b))
+    : listed
+  const onPage = new Set(seen)
+
+  const setOptions = (options: string[]) => onChange({ ...display, options })
+
+  const add = (value: string) => {
+    const text = value.trim()
+    if (text && !listed.includes(text)) setOptions([...listed, text])
+  }
+
+  const remove = (value: string) => {
+    const { [value]: _gone, ...colors } = display.colors
+    onChange({ ...display, colors, options: listed.filter((item) => item !== value) })
+  }
+
+  const move = (from: string, to: string) => {
+    const fromIndex = listed.indexOf(from)
+    const toIndex = listed.indexOf(to)
+    if (from === to || fromIndex < 0 || toIndex < 0) return
+    const next = listed.filter((item) => item !== from)
+    next.splice(toIndex, 0, from)
+    setOptions(next)
+  }
+
+  const suggest = async () => {
+    if (!onSuggest) return
+    setSuggesting(true)
+    setNote(null)
+    try {
+      const found = await onSuggest()
+      const fresh = found.filter((value) => value !== "" && !listed.includes(value))
+      if (fresh.length) setOptions([...listed, ...fresh])
+      setNote(
+        fresh.length
+          ? `Added ${fresh.length} ${fresh.length === 1 ? "value" : "values"} from the column.`
+          : "Every value in the column is listed already."
+      )
+    } catch (failure) {
+      setNote(errorMessage(failure))
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3 text-[13px]">
+        <label className="flex items-center gap-2">
+          <Switch
+            checked={!display.plain}
+            label="Color-code options"
+            onChange={(on) => onChange({ ...display, plain: !on })}
+          />
+          Color-code options
+        </label>
+        <label className="flex items-center gap-2">
+          <Switch
+            checked={!!display.alphabetize}
+            label="Alphabetize"
+            onChange={(on) => onChange({ ...display, alphabetize: on })}
+          />
+          Alphabetize
+        </label>
+      </div>
+
+      <div className="overflow-hidden rounded-lg border">
+        <div className="max-h-56 overflow-y-auto py-1">
+          {shown.length === 0 && !adding && (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              No values on this page. Add some, or suggest them from the column.
+            </p>
+          )}
+          {shown.map((value) => {
+            const tone = display.colors[value] ?? tagTone(value)
+            const draggable = !display.alphabetize
+            const below =
+              dragging !== null && listed.indexOf(dragging) < listed.indexOf(value)
+            return (
+              <div
+                key={value}
+                draggable={draggable}
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move"
+                  event.dataTransfer.setData("text/plain", value)
+                  setDragging(value)
+                }}
+                onDragOver={(event) => {
+                  if (dragging === null) return
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = "move"
+                  setOver(value)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  if (dragging !== null) move(dragging, value)
+                  setDragging(null)
+                  setOver(null)
+                }}
+                onDragEnd={() => {
+                  setDragging(null)
+                  setOver(null)
+                }}
+                className={cn(
+                  "group/option flex h-9 items-center gap-2.5 border-y border-transparent px-2 text-[13px]",
+                  dragging === value && "opacity-40",
+                  over === value && dragging !== value && (below ? "border-b-primary" : "border-t-primary")
+                )}
+              >
+                <GripVertical
+                  aria-hidden
+                  className={cn(
+                    "size-3.5 shrink-0 text-muted-foreground",
+                    draggable ? "cursor-grab" : "opacity-0"
+                  )}
+                />
+                {!display.plain && (
+                  <ToneSwatch
+                    value={value}
+                    tone={tone}
+                    onChange={(next) =>
+                      onChange({ ...display, colors: { ...display.colors, [value]: next } })
+                    }
+                  />
+                )}
+                <span className="min-w-0 flex-1 truncate" title={value}>
+                  {value}
+                </span>
+                {!onPage.has(value) && (
+                  <button
+                    type="button"
+                    aria-label={`Remove ${value}`}
+                    title="Not on this page — remove it from the list"
+                    onClick={() => remove(value)}
+                    className="hidden size-5 items-center justify-center rounded text-muted-foreground group-hover/option:flex hover:bg-muted hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                )}
+              </div>
+            )
+          })}
+          {adding && (
+            <div className="flex h-9 items-center gap-2.5 px-2">
+              <span className="size-3.5 shrink-0" />
+              <Input
+                autoFocus
+                value={draft}
+                placeholder="New option"
+                aria-label="New option"
+                className="h-7 text-[13px]"
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    add(draft)
+                    setDraft("")
+                  } else if (event.key === "Escape") {
+                    // Closes the new option, not the whole settings.
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setDraft("")
+                    setAdding(false)
+                  }
+                }}
+                onBlur={() => {
+                  add(draft)
+                  setDraft("")
+                  setAdding(false)
+                }}
+              />
+            </div>
+          )}
+        </div>
+        <div className={cn("grid border-t", onSuggest ? "grid-cols-2" : "grid-cols-1")}>
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="flex h-9 items-center justify-center gap-2 text-[13px] hover:bg-muted/60"
+          >
+            <Plus className="size-3.5" />
+            Add option
+          </button>
+          {onSuggest && (
+            <button
+              type="button"
+              disabled={suggesting}
+              title="List every value the column holds, not only those on this page"
+              onClick={() => void suggest()}
+              className="flex h-9 items-center justify-center gap-2 border-l bg-violet-500/8 text-[13px] text-violet-700 hover:bg-violet-500/14 disabled:opacity-60 dark:text-violet-300"
+            >
+              {suggesting ? <Spinner className="size-3.5" /> : <Sparkles className="size-3.5" />}
+              Auto suggest
+            </button>
+          )}
+        </div>
+      </div>
+      {note && <p className="-mt-1 text-[11px] text-muted-foreground">{note}</p>}
     </div>
   )
 }
 
 /**
- * A column's settings, after NocoDB's field settings: how it is shown —
- * picked from the types that suit its kind, each with NocoDB's options — and
- * a description for its header. The values on the page are the preview.
+ * A column's settings, after NocoDB's field settings, in a card under its
+ * header: how it is shown — picked from the types that suit its kind, each
+ * with NocoDB's options — and a description for its header. Only how it is
+ * shown changes; the data stays as the database prints it.
  */
 export function FieldSettingsDialog({
   column,
+  header,
   current,
   samples,
   onSave,
+  onSuggest,
   onClose,
 }: {
   column: GridColumn
+  /** The column's header, which the card hangs from. */
+  header: HTMLElement | null
   current: FieldSettings | null
   /** The column's values on the page, for the preview and the tag colours. */
   samples: Cell[]
   onSave: (settings: FieldSettings | null) => Promise<void>
+  /** Every distinct value of the column, split into tags for a multi select. */
+  onSuggest?: (multi: boolean) => Promise<string[]>
   onClose: () => void
 }) {
   const [display, setDisplay] = useState<FieldDisplay | null>(current?.display ?? null)
   const [description, setDescription] = useState(current?.description ?? "")
+  const [describing, setDescribing] = useState(!!current?.description)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -388,10 +641,11 @@ export function FieldSettingsDialog({
   const distinct = useMemo(() => {
     const values =
       display?.type === "multiselect" ? present.flatMap(splitValues) : present
-    return [...new Set(values)].slice(0, 30)
+    return [...new Set(values)].slice(0, 100)
   }, [present, display?.type])
   const automatic: CellFormat = useMemo(() => detectFormat(column, samples), [column, samples])
   const format = display ? formatOfDisplay(display) : automatic
+  const isSelect = display?.type === "select" || display?.type === "multiselect"
 
   const save = async () => {
     setSaving(true)
@@ -409,37 +663,25 @@ export function FieldSettingsDialog({
     }
   }
 
-  const typeRow = (type: FieldDisplayType | null) => {
-    const picked = type === null ? display === null : display?.type === type
-    return (
-      <button
-        key={type ?? "auto"}
-        type="button"
-        role="radio"
-        aria-checked={picked}
-        onClick={() =>
-          setDisplay(
-            type === null
-              ? null
-              : current?.display?.type === type
-                ? current.display
-                : defaultDisplay(type)
-          )
-        }
-        className={cn(
-          "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
-          picked ? "bg-accent font-medium" : "hover:bg-accent/50"
-        )}
-      >
-        {type === null ? (
-          <Shapes className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <FieldIcon column={column} format={formatOfDisplay(defaultDisplay(type))} chosen={picked} />
-        )}
-        {type === null ? "Automatic" : TYPE_LABEL[type]}
-      </button>
+  const pickType = (type: FieldDisplayType | null) =>
+    setDisplay(
+      type === null
+        ? null
+        : current?.display?.type === type
+          ? current.display
+          : // A select keeps its colours and order when it becomes the other kind.
+            (type === "select" || type === "multiselect") &&
+              (display?.type === "select" || display?.type === "multiselect")
+            ? { ...display, type }
+            : defaultDisplay(type)
     )
-  }
+
+  const typeIcon = (type: FieldDisplayType | null) =>
+    type === null ? (
+      <Shapes className="size-3.5 shrink-0 text-muted-foreground" />
+    ) : (
+      <FieldIcon column={column} format={formatOfDisplay(defaultDisplay(type))} />
+    )
 
   const options = (): ReactNode => {
     if (!display) return null
@@ -605,13 +847,12 @@ export function FieldSettingsDialog({
       case "select":
       case "multiselect":
         return (
-          <Option label="Colours">
-            <ValueColours
-              values={distinct}
-              colors={display.colors}
-              onChange={(colors) => setDisplay({ ...display, colors })}
-            />
-          </Option>
+          <SelectOptionsEditor
+            display={display}
+            seen={distinct}
+            onChange={setDisplay}
+            onSuggest={onSuggest ? () => onSuggest(display.type === "multiselect") : undefined}
+          />
         )
       case "checkbox":
         return (
@@ -684,87 +925,135 @@ export function FieldSettingsDialog({
   }
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[min(640px,calc(100%-4rem))] max-w-[calc(100%-4rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
-        <div className="border-b py-3.5 pr-12 pl-5">
-          <DialogTitle className="text-[15px] font-semibold tracking-tight">
-            <span className="font-mono text-[14px]">{column.name}</span> field settings
-          </DialogTitle>
-          <DialogDescription className="text-xs text-muted-foreground">
-            {column.type} · only how it is shown changes; the data and edits stay as the
-            database prints them.
-          </DialogDescription>
-        </div>
+    <Popover.Root
+      open
+      onOpenChange={(open, details) => {
+        // The column's menu hands its focus back to the header as it closes;
+        // that is not leaving the settings. A click outside or Escape is.
+        if (!open && details.reason !== "focus-out") onClose()
+      }}
+    >
+      <Popover.Portal>
+        <Popover.Positioner
+          anchor={header ?? undefined}
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          collisionPadding={8}
+          className="isolate z-50"
+        >
+          <Popover.Popup className="flex max-h-[min(680px,var(--available-height))] w-[400px] flex-col gap-3 rounded-xl bg-popover p-4 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95">
+            <Popover.Title className="sr-only">{column.name} field settings</Popover.Title>
 
-        <div className="flex min-h-0 flex-1">
-          <div
-            role="radiogroup"
-            aria-label="Show as"
-            className="flex w-44 shrink-0 flex-col gap-px overflow-y-auto border-r bg-sidebar p-2"
-          >
-            {typeRow(null)}
-            <div className="my-1 border-t border-sidebar-border" />
-            {types.map((type) => typeRow(type))}
-          </div>
+            {/* The column itself is not renamed here: only how it is shown. */}
+            <div
+              className="flex h-9 shrink-0 items-center gap-2 rounded-lg border bg-muted/30 px-3"
+              title="The column's name in the database"
+            >
+              <span className="min-w-0 flex-1 truncate font-medium">{column.name}</span>
+              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                {column.type}
+              </span>
+            </div>
 
-          <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {display
-                ? TYPE_HINT[display.type]
-                : "Read off the column's type, name and values: tags for a small set, links for addresses, checkboxes for booleans, grouped digits for decimals."}
-            </p>
+            <SelectRoot
+              value={display?.type ?? "auto"}
+              onValueChange={(value) => {
+                if (typeof value === "string") {
+                  pickType(value === "auto" ? null : (value as FieldDisplayType))
+                }
+              }}
+            >
+              <SelectTrigger aria-label="Show as" className="h-9 w-full shrink-0 shadow-xs">
+                <span className="flex min-w-0 flex-1 items-center gap-2.5">
+                  {typeIcon(display?.type ?? null)}
+                  {display ? TYPE_LABEL[display.type] : "Automatic"}
+                </span>
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false} align="start">
+                <SelectItem value="auto">
+                  {typeIcon(null)}
+                  Automatic
+                </SelectItem>
+                <SelectSeparator />
+                {types.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {typeIcon(type)}
+                    {TYPE_LABEL[type]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </SelectRoot>
 
-            {options()}
+            <div className="-mx-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4">
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {display
+                  ? TYPE_HINT[display.type]
+                  : "Read off the column's type, name and values: tags for a small set, links for addresses, checkboxes for booleans, grouped digits for decimals."}
+              </p>
 
-            <Option label="Preview">
-              <div className="overflow-hidden rounded-lg border">
-                <table className="w-full border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-muted/50 text-left text-[11px] text-muted-foreground">
-                      <th className="border-b px-3 py-1.5 font-medium">Stored</th>
-                      <th className="border-b px-3 py-1.5 font-medium">Shown</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(present.length ? present.slice(0, 5) : [null]).map((value, index) => (
-                      <tr key={index} className="border-b last:border-b-0">
-                        <td className="max-w-40 truncate px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-                          {value ?? "NULL"}
-                        </td>
-                        <td className="max-w-72 truncate px-3 py-1.5 text-[13px]">
-                          <CellText value={value} kind={column.kind} format={format} raw={false} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Option>
+              {options()}
 
-            <Option label="Description" hint="Shown as ⓘ beside the column's name.">
-              <Textarea
-                value={description}
-                rows={2}
-                placeholder="What this column holds, its unit, where it comes from…"
-                onChange={(event) => setDescription(event.target.value)}
-                className="text-xs"
-              />
-            </Option>
+              {!isSelect && (
+                <Option label="Preview">
+                  <div className="overflow-hidden rounded-lg border">
+                    <table className="w-full border-collapse text-xs">
+                      <tbody>
+                        {(present.length ? present.slice(0, 3) : [null]).map((value, index) => (
+                          <tr key={index} className="border-b last:border-b-0">
+                            <td className="max-w-32 truncate px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+                              {value ?? "NULL"}
+                            </td>
+                            <td className="max-w-48 truncate px-3 py-1.5 text-[13px]">
+                              <CellText value={value} kind={column.kind} format={format} raw={false} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Option>
+              )}
 
-            {error && <ErrorNote>{error}</ErrorNote>}
-          </div>
-        </div>
+              {describing && (
+                <Option label="Description" hint="Shown as ⓘ beside the column's name.">
+                  <Textarea
+                    autoFocus={!current?.description}
+                    value={description}
+                    rows={2}
+                    placeholder="What this column holds, its unit, where it comes from…"
+                    onChange={(event) => setDescription(event.target.value)}
+                    className="text-xs"
+                  />
+                </Option>
+              )}
 
-        <div className="flex items-center justify-end gap-2 border-t px-5 py-3">
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button size="sm" onClick={() => void save()} disabled={saving}>
-            {saving && <Spinner className="size-3.5" />}
-            Save
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+              {error && <ErrorNote>{error}</ErrorNote>}
+            </div>
+
+            <div className="flex shrink-0 items-center gap-2 pt-1">
+              {!describing && (
+                <button
+                  type="button"
+                  onClick={() => setDescribing(true)}
+                  className="flex h-8 items-center gap-2 rounded-md px-1.5 text-[13px] text-muted-foreground hover:text-foreground"
+                >
+                  <Plus className="size-3.5" />
+                  Add description
+                </button>
+              )}
+              <span className="flex-1" />
+              <Button variant="outline" size="sm" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => void save()} disabled={saving}>
+                {saving && <Spinner className="size-3.5" />}
+                Update field
+              </Button>
+            </div>
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   )
 }

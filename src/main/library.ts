@@ -108,6 +108,16 @@ function colours(value: unknown): Record<string, Tone> {
   return out
 }
 
+/** A select's values in their order: text, each once. */
+function selectOptions(value: unknown): string[] {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) throw new Error("A select's options are a list.")
+  const out = [...new Set(value.filter((item): item is string => typeof item === "string" && item !== ""))]
+  if (out.length > 500) throw new Error("A select has at most 500 options.")
+  if (out.some((item) => item.length > 200)) throw new Error("Keep each option under 200 characters.")
+  return out
+}
+
 /**
  * A display as the renderer sent it, checked field by field and rebuilt, so
  * nothing but these shapes is ever written to the library. Shapes saved by
@@ -184,8 +194,16 @@ export function checkFieldDisplay(input: FieldDisplay): FieldDisplay {
         format: oneOf(DURATION_FORMATS, raw.format, "h:mm:ss"),
       }
     case "select":
-    case "multiselect":
-      return { type: input.type, colors: colours(raw.colors) }
+    case "multiselect": {
+      const known = selectOptions(raw.options)
+      return {
+        type: input.type,
+        colors: colours(raw.colors),
+        ...(known.length ? { options: known } : {}),
+        ...(raw.plain === true ? { plain: true } : {}),
+        ...(raw.alphabetize === true ? { alphabetize: true } : {}),
+      }
+    }
     case "checkbox":
       return {
         type: "checkbox",

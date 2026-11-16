@@ -45,6 +45,8 @@ import {
 } from "lucide-react"
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual"
 import {
+  memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -52,6 +54,7 @@ import {
   useState,
   type PointerEvent,
   type ReactNode,
+  type RefObject,
 } from "react"
 
 import type {
@@ -83,6 +86,7 @@ import {
   formatNumber,
   formatOfDisplay,
   formatPercent,
+  orderTags,
   percentShare,
   splitValues,
   groupDigits,
@@ -301,13 +305,6 @@ export type GridEditing = {
   onChange(target: RowTarget, column: string, value: Cell): void
 }
 
-/**
- * Rows drawn beyond either edge of the viewport. Only the rows in view are in
- * the DOM — every open tab stays mounted, and a few tabs of a few hundred rows
- * each were tens of thousands of cells.
- */
-const OVERSCAN = 12
-
 const RATING_ICON: Record<RatingIcon, typeof Star> = {
   star: Star,
   heart: Heart,
@@ -485,8 +482,12 @@ export function CellText({
     case "multitag":
       return (
         <span className="inline-flex max-w-full gap-1 overflow-hidden align-middle">
-          {splitValues(value).map((item, index) => (
-            <Tag key={`${item}-${index}`} value={item} tone={format.colors?.[item]} />
+          {orderTags(splitValues(value), format.order, format.alphabetize).map((item, index) => (
+            <Tag
+              key={`${item}-${index}`}
+              value={item}
+              tone={format.plain ? "gray" : format.colors?.[item]}
+            />
           ))}
         </span>
       )
@@ -503,7 +504,7 @@ export function CellText({
       )
     }
     case "tag":
-      return <Tag value={value} tone={format.colors?.[value]} />
+      return <Tag value={value} tone={format.plain ? "gray" : format.colors?.[value]} />
     case "reference":
       return (
         <span className="cell-chip" title={`→ ${format.table}`}>
@@ -730,6 +731,298 @@ function ColumnMenu({
   )
 }
 
+/** Rows drawn beyond either edge of the viewport. */
+const OVERSCAN = 12
+
+/**
+ * The rows of the grid, only those in view in the DOM, with an empty row
+ * standing in for each run that is not, so the table is as tall as all of
+ * them. Its own component: scrolling re-renders it, not the header and the
+ * grid around it.
+ */
+function GridBody({
+  count,
+  scroller,
+  estimate,
+  keep,
+  colSpan,
+  row,
+}: {
+  count: number
+  scroller: RefObject<HTMLDivElement | null>
+  /** A row's height as the stylesheet sets it; the first row drawn says. */
+  estimate: number
+  /** A row drawn even out of view — the one being typed into — or -1. */
+  keep: number
+  colSpan: number
+  row: (index: number) => ReactNode
+}) {
+  // Every row is as tall as the others: one is measured, not each. Measuring
+  // each as it scrolled in moved the scroll position whenever one came out a
+  // pixel off the estimate.
+  const [measured, setMeasured] = useState<{ estimate: number; height: number } | null>(null)
+  const rowHeight = measured?.estimate === estimate ? measured.height : estimate
+
+  const virtualizer = useVirtualizer({
+    count,
+    getScrollElement: () => scroller.current,
+    estimateSize: () => rowHeight,
+    overscan: OVERSCAN,
+    // Enough rows on the first draw for the columns to be measured by.
+    initialRect: { width: 0, height: 1000 },
+    // Rendered with the next frame rather than inside the scroll event.
+    useFlushSync: false,
+    rangeExtractor: (range) => {
+      const indexes = defaultRangeExtractor(range)
+      if (keep < 0 || keep >= count || indexes.includes(keep)) return indexes
+      return [...indexes, keep].sort((a, b) => a - b)
+    },
+  })
+
+  useEffect(() => {
+    virtualizer.measure()
+  }, [rowHeight, virtualizer])
+
+  const body = useRef<HTMLTableSectionElement>(null)
+  // A tab opened in the background has no height until it is shown.
+  const shown = (virtualizer.scrollRect?.height ?? 0) > 0
+  const hasRows = count > 0
+  useLayoutEffect(() => {
+    const first = body.current?.querySelector("tr[data-index]")
+    const height = first?.getBoundingClientRect().height ?? 0
+    if (height > 0 && Math.abs(height - rowHeight) > 0.01) setMeasured({ estimate, height })
+    // Measured when the row height can have changed, not on every scroll.
+  }, [estimate, hasRows, shown])
+
+  const out: ReactNode[] = []
+  let cursor = 0
+  const spacer = (height: number, key: string) => (
+    <tr key={key} aria-hidden className="grid-spacer">
+      <td colSpan={colSpan} style={{ height }} />
+    </tr>
+  )
+  for (const item of virtualizer.getVirtualItems()) {
+    if (item.start > cursor) out.push(spacer(item.start - cursor, `gap-${item.index}`))
+    out.push(row(item.index))
+    cursor = item.end
+  }
+  const size = virtualizer.getTotalSize()
+  if (size > cursor) out.push(spacer(size - cursor, "gap-end"))
+
+  return <tbody ref={body}>{out}</tbody>
+}
+
+/**
+ * One row. Memoised: as the grid scrolls, the rows already drawn keep their
+ * props and are not drawn again; only those coming into view are.
+ */
+const GridRow = memo(function GridRow({
+  kind,
+  index,
+  flatIndex,
+  values,
+  insert,
+  edits,
+  deleted,
+  selected,
+  activeColumn,
+  columns,
+  hidden,
+  formats,
+  display,
+  raw,
+  rowNumber,
+  editable,
+  onSelect,
+  onChange,
+  onActivate,
+  onExpand,
+}: {
+  kind: RowTarget["kind"]
+  index: number
+  flatIndex: number
+  /** A row that exists: its values as fetched. */
+  values?: Cell[]
+  /** A row about to be added: what has been typed into it. */
+  insert?: Record<string, Cell>
+  edits: Record<string, Cell> | undefined
+  deleted: boolean
+  selected: boolean
+  /** The column of this row being typed into, if any. */
+  activeColumn: string | null
+  columns: GridColumn[]
+  hidden: ReadonlySet<string> | undefined
+  formats: CellFormat[]
+  /** The index of the column rows are known by, or -1. */
+  display: number
+  raw: boolean
+  rowNumber: number
+  editable: boolean
+  onSelect: (target: RowTarget, mode: "replace" | "toggle" | "range") => void
+  onChange: (target: RowTarget, column: string, value: Cell) => void
+  onActivate: (active: { row: string; column: string } | null) => void
+  onExpand: (target: RowTarget) => void
+}) {
+  const target: RowTarget = { kind, index }
+  const key = rowKey(target)
+  const isInsert = kind === "insert"
+  const rowValues: (Cell | undefined)[] = isInsert
+    ? columns.map((column) => insert?.[column.name])
+    : (values ?? [])
+  return (
+    <tr
+      data-index={flatIndex}
+      className={cn(
+        selected && "is-selected",
+        isInsert && "is-added",
+        deleted && "is-deleted"
+      )}
+    >
+      <td
+        className="gutter"
+        onClick={
+          editable
+            ? (event) =>
+                onSelect(
+                  target,
+                  event.shiftKey
+                    ? "range"
+                    : event.metaKey || event.ctrlKey
+                      ? "toggle"
+                      : "replace"
+                )
+            : undefined
+        }
+      >
+        <span className="row-num">
+          {isInsert ? "+" : `${rowNumber}.`}
+        </span>
+        <span className="row-actions">
+          {editable && (
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={selected}
+              aria-label="Select row"
+              className={cn("cell-check", selected && "is-on")}
+              onClick={(event) => {
+                event.stopPropagation()
+                onSelect(target, "toggle")
+              }}
+            >
+              {selected && <Check strokeWidth={3} />}
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="Expand row"
+            title="Expand row"
+            className="row-expand"
+            onClick={(event) => {
+              event.stopPropagation()
+              onExpand(target)
+            }}
+          >
+            <Maximize2 />
+          </button>
+        </span>
+      </td>
+      {columns.map((column, index) => {
+        if (hidden?.has(column.name)) return null
+        const edited = edits !== undefined && column.name in edits
+        const value = edited ? edits[column.name] : rowValues[index]
+        const isEditing = activeColumn === column.name
+        const locked = editable ? lockedBecause(column, isInsert) : null
+        const canEdit = editable && !deleted && !locked
+        const format = formats[index] ?? { kind: "plain" }
+
+        if (isEditing && editable) {
+          const commit = (next: Cell) => {
+            onActivate(null)
+            onChange(target, column.name, next)
+          }
+          // A date with a calendar under it; one that does not read as a
+          // date (`infinity`) is still edited as text.
+          const dateKind = dateEditorKind(column)
+          const asDate = dateKind && (value == null || value === "" || !!parseDateValue(value))
+          return (
+            <td key={column.name} className="is-editing">
+              {asDate ? (
+                <DateCellEditor
+                  initial={value}
+                  withTime={dateKind === "datetime"}
+                  nullable={column.nullable ?? true}
+                  onCancel={() => onActivate(null)}
+                  onCommit={commit}
+                />
+              ) : (
+                <CellEditor
+                  initial={value}
+                  nullable={column.nullable ?? true}
+                  onCancel={() => onActivate(null)}
+                  onCommit={commit}
+                />
+              )}
+            </td>
+          )
+        }
+
+        return (
+          <td
+            key={column.name}
+            className={cn(
+              ((column.kind === "number" &&
+                (format.kind === "plain" || format.kind === "decimal")) ||
+                format.kind === "number" ||
+                format.kind === "currency" ||
+                format.kind === "duration" ||
+                (format.kind === "percent" && format.progress === "none")) &&
+                "text-right",
+              (format.kind === "bool" || format.kind === "check" || format.kind === "image") &&
+                "text-center",
+              (column.kind === "json" || column.kind === "binary") && "is-code",
+              index === display && "cell-display",
+              edited && "is-edited",
+              locked && "is-locked"
+            )}
+            title={
+              locked && !deleted
+                ? `${locked} — not edited here`
+                : value != null && value.length > 40
+                  ? value
+                  : undefined
+            }
+            onDoubleClick={
+              canEdit
+                ? () => onActivate({ row: key, column: column.name })
+                : undefined
+            }
+            onClick={
+              format.kind === "url" && value
+                ? (event) => {
+                    // ⌘-click (Ctrl elsewhere): the main process hands an
+                    // http(s) address to the browser.
+                    if (event.metaKey || event.ctrlKey) {
+                      window.open(value, "_blank", "noopener")
+                    }
+                  }
+                : undefined
+            }
+          >
+            <CellText
+              value={value}
+              kind={column.kind}
+              format={format}
+              raw={raw}
+              placeholder="default"
+            />
+          </td>
+        )
+      })}
+    </tr>
+  )
+})
+
 export function DataGrid({
   columns,
   rows,
@@ -754,8 +1047,9 @@ export function DataGrid({
   onSortTo?: (sort: Sort | null) => void
   /** The table's field settings: displays, descriptions, display value. */
   fields?: TableFields
-  /** Opens a column's field settings; absent where there are none. */
-  onEditField?: (column: string) => void
+  /** Opens a column's field settings, under its header; absent where there
+   * are none. */
+  onEditField?: (column: string, header: HTMLElement | null) => void
   /** Absent for a result that is only to be read. */
   editing?: GridEditing
   /** Where the widths a user drags are kept — one table's; none, for a
@@ -918,223 +1212,50 @@ export function DataGrid({
     : -1
 
   const scroller = useRef<HTMLDivElement>(null)
-  const virtualizer = useVirtualizer({
-    count: total,
-    getScrollElement: () => scroller.current,
-    estimateSize: () => (compact ? 25 : 32),
-    overscan: OVERSCAN,
-    // Enough rows on the first draw for the columns to be measured by.
-    initialRect: { width: 0, height: 1000 },
-    rangeExtractor: (range) => {
-      const indexes = defaultRangeExtractor(range)
-      if (editingIndex < 0 || editingIndex >= total || indexes.includes(editingIndex)) {
-        return indexes
-      }
-      return [...indexes, editingIndex].sort((a, b) => a - b)
-    },
-  })
 
-  // Row height changes with the compact setting; every row is measured again.
-  useEffect(() => {
-    virtualizer.measure()
-  }, [compact, virtualizer])
+  // What the rows call goes through a ref: `editing` is a new object on every
+  // render above, and a row whose props are unchanged is not drawn again.
+  const editingRef = useRef(editing)
+  editingRef.current = editing
+  const onSelect = useCallback(
+    (target: RowTarget, mode: "replace" | "toggle" | "range") =>
+      editingRef.current?.onSelect(target, mode),
+    []
+  )
+  const onChange = useCallback(
+    (target: RowTarget, column: string, value: Cell) =>
+      editingRef.current?.onChange(target, column, value),
+    []
+  )
 
-  /**
-   * The rows in view, with an empty row standing in for each run of rows that
-   * is not drawn, so the table is as tall as all of them.
-   */
-  const body = () => {
-    const out: ReactNode[] = []
-    let cursor = 0
-    const spacer = (height: number, key: string) => (
-      <tr key={key} aria-hidden className="grid-spacer">
-        <td colSpan={seen.length + 1} style={{ height }} />
-      </tr>
-    )
-    for (const item of virtualizer.getVirtualItems()) {
-      if (item.start > cursor) out.push(spacer(item.start - cursor, `gap-${item.index}`))
-      const target = targetAt(item.index)
-      out.push(
-        renderRow(
-          target,
-          target.kind === "row"
-            ? (rows[target.index] ?? [])
-            : columns.map((column) => inserts[target.index]?.[column.name]),
-          item.index
-        )
-      )
-      cursor = item.end
-    }
-    const size = virtualizer.getTotalSize()
-    if (size > cursor) out.push(spacer(size - cursor, "gap-end"))
-    return out
-  }
-
-  const renderRow = (
-    target: RowTarget,
-    values: (Cell | undefined)[],
-    flatIndex: number
-  ) => {
+  const renderRow = (flat: number) => {
+    const target = targetAt(flat)
     const key = rowKey(target)
     const isInsert = target.kind === "insert"
-    const deleted = !isInsert && !!editing?.deleted.has(target.index)
-    const edits = isInsert ? undefined : editing?.edits[target.index]
-    const selected = !!editing?.selected.has(key)
-
     return (
-      <tr
+      <GridRow
         key={key}
-        data-index={flatIndex}
-        ref={virtualizer.measureElement}
-        className={cn(
-          selected && "is-selected",
-          isInsert && "is-added",
-          deleted && "is-deleted"
-        )}
-      >
-        <td
-          className="gutter"
-          onClick={
-            editing
-              ? (event) =>
-                  editing.onSelect(
-                    target,
-                    event.shiftKey
-                      ? "range"
-                      : event.metaKey || event.ctrlKey
-                        ? "toggle"
-                        : "replace"
-                  )
-              : undefined
-          }
-        >
-          <span className="row-num">
-            {isInsert ? "+" : `${firstRowNumber + target.index}.`}
-          </span>
-          <span className="row-actions">
-            {editing && (
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={selected}
-                aria-label="Select row"
-                className={cn("cell-check", selected && "is-on")}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  editing.onSelect(target, "toggle")
-                }}
-              >
-                {selected && <Check strokeWidth={3} />}
-              </button>
-            )}
-            <button
-              type="button"
-              aria-label="Expand row"
-              title="Expand row"
-              className="row-expand"
-              onClick={(event) => {
-                event.stopPropagation()
-                setExpanded(target)
-              }}
-            >
-              <Maximize2 />
-            </button>
-          </span>
-        </td>
-        {columns.map((column, index) => {
-          if (isHidden(column.name)) return null
-          const edited = edits !== undefined && column.name in edits
-          const value = edited ? edits[column.name] : values[index]
-          const isEditing =
-            active?.row === key && active.column === column.name
-          const locked = editing ? lockedBecause(column, isInsert) : null
-          const canEdit = !!editing && !deleted && !locked
-          const format = formats[index] ?? { kind: "plain" }
-
-          if (isEditing && editing) {
-            const commit = (next: Cell) => {
-              setActive(null)
-              editing.onChange(target, column.name, next)
-            }
-            // A date with a calendar under it; one that does not read as a
-            // date (`infinity`) is still edited as text.
-            const dateKind = dateEditorKind(column)
-            const asDate = dateKind && (value == null || value === "" || !!parseDateValue(value))
-            return (
-              <td key={column.name} className="is-editing">
-                {asDate ? (
-                  <DateCellEditor
-                    initial={value}
-                    withTime={dateKind === "datetime"}
-                    nullable={column.nullable ?? true}
-                    onCancel={() => setActive(null)}
-                    onCommit={commit}
-                  />
-                ) : (
-                  <CellEditor
-                    initial={value}
-                    nullable={column.nullable ?? true}
-                    onCancel={() => setActive(null)}
-                    onCommit={commit}
-                  />
-                )}
-              </td>
-            )
-          }
-
-          return (
-            <td
-              key={column.name}
-              className={cn(
-                ((column.kind === "number" &&
-                  (format.kind === "plain" || format.kind === "decimal")) ||
-                  format.kind === "number" ||
-                  format.kind === "currency" ||
-                  format.kind === "duration" ||
-                  (format.kind === "percent" && format.progress === "none")) &&
-                  "text-right",
-                (format.kind === "bool" || format.kind === "check" || format.kind === "image") &&
-                  "text-center",
-                (column.kind === "json" || column.kind === "binary") && "is-code",
-                index === display && "cell-display",
-                edited && "is-edited",
-                locked && "is-locked"
-              )}
-              title={
-                locked && !deleted
-                  ? `${locked} — not edited here`
-                  : value != null && value.length > 40
-                    ? value
-                    : undefined
-              }
-              onDoubleClick={
-                canEdit
-                  ? () => setActive({ row: key, column: column.name })
-                  : undefined
-              }
-              onClick={
-                format.kind === "url" && value
-                  ? (event) => {
-                      // ⌘-click (Ctrl elsewhere): the main process hands an
-                      // http(s) address to the browser.
-                      if (event.metaKey || event.ctrlKey) {
-                        window.open(value, "_blank", "noopener")
-                      }
-                    }
-                  : undefined
-              }
-            >
-              <CellText
-                value={value}
-                kind={column.kind}
-                format={format}
-                raw={!formatting}
-                placeholder="default"
-              />
-            </td>
-          )
-        })}
-      </tr>
+        kind={target.kind}
+        index={target.index}
+        flatIndex={flat}
+        values={isInsert ? undefined : rows[target.index]}
+        insert={isInsert ? inserts[target.index] : undefined}
+        edits={isInsert ? undefined : editing?.edits[target.index]}
+        deleted={!isInsert && !!editing?.deleted.has(target.index)}
+        selected={!!editing?.selected.has(key)}
+        activeColumn={active?.row === key ? active.column : null}
+        columns={columns}
+        hidden={hidden}
+        formats={formats}
+        display={display}
+        raw={!formatting}
+        rowNumber={firstRowNumber + target.index}
+        editable={!!editing}
+        onSelect={onSelect}
+        onChange={onChange}
+        onActivate={setActive}
+        onExpand={setExpanded}
+      />
     )
   }
 
@@ -1146,7 +1267,7 @@ export function DataGrid({
   }
 
   return (
-    <div ref={scroller} className="h-full overflow-auto">
+    <div ref={scroller} className="h-full overflow-auto [overflow-anchor:none]">
       <table
         ref={table}
         className={cn(
@@ -1244,7 +1365,11 @@ export function DataGrid({
                       column={column}
                       sorted={sorted}
                       onSortTo={onSortTo}
-                      onEditField={onEditField ? () => onEditField(column.name) : undefined}
+                      onEditField={
+                        onEditField
+                          ? () => onEditField(column.name, heads.current.get(column.name) ?? null)
+                          : undefined
+                      }
                       onFit={() => fit(column.name)}
                       onResetWidth={
                         widthKey && column.name in resized.current
@@ -1275,7 +1400,14 @@ export function DataGrid({
             })}
           </tr>
         </thead>
-        <tbody>{body()}</tbody>
+        <GridBody
+          count={total}
+          scroller={scroller}
+          estimate={compact ? 25 : 32}
+          keep={editingIndex}
+          colSpan={seen.length + 1}
+          row={renderRow}
+        />
       </table>
 
       {expanded && (
