@@ -99,6 +99,7 @@ const shop = connections.save(null, {
   database: "postgres",
   ssl: "off",
   password: "",
+  access: "read_write",
 })
 
 const charts: ChartItem[] = []
@@ -860,7 +861,11 @@ await check("chat: a tool call is on screen while its input is written, then who
 
 // ── Access modes ───────────────────────────────────────────────────────────
 
-await check("access: saved per connection, read & write when never set", () => {
+await check("access: saved per connection, read-only for a new one when never set", () => {
+  const { access: _none, ...fresh } = shop
+  const created = connections.save(null, { ...fresh, name: "Fresh" })
+  assert.equal(created.access, "read_only")
+  connections.delete(created.id)
   assert.equal(shop.access, "read_write")
   const careful = connections.save(shop.id, { ...shop, access: "confirm" })
   assert.equal(careful.access, "confirm")
