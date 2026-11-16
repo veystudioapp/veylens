@@ -1147,7 +1147,50 @@ export type DesktopApi = {
   /** Answers the card an `execute_sql` call is waiting on. */
   answerApproval(chatId: string, toolId: string, allow: boolean): Promise<void>
   onChatEvent(listener: (event: ChatEvent) => void): () => void
+
+  /** This build's version. */
+  appVersion(): Promise<string>
+  /** Asks GitHub for the latest release. An unreachable GitHub is `unknown`,
+   * not a rejection. */
+  checkForUpdate(): Promise<UpdateCheck>
+  /**
+   * Downloads a release and quits into it: Squirrel.Mac on macOS, the NSIS
+   * installer on Windows. Throws while there is still a window to say why;
+   * success is the app quitting.
+   */
+  installUpdate(version: string): Promise<void>
+  onUpdateProgress(listener: (event: UpdateProgress) => void): () => void
 }
+
+export type UpdateCheck =
+  | { status: "current"; current: string }
+  | {
+      status: "available"
+      /** Without the tag's `v`. */
+      version: string
+      current: string
+      /** GitHub's markdown; empty when the release has none. */
+      notes: string
+      url: string
+      /** Whether `installUpdate` works here (macOS and Windows); elsewhere the
+       * release page is the only option. */
+      installable: boolean
+    }
+  | { status: "unknown"; current: string; error: string }
+
+/**
+ * How far an install has got. Only the download can be measured; `installing`
+ * is the installer checking and replacing the app while it quits.
+ */
+export type UpdateProgress =
+  | {
+      stage: "downloading"
+      version: string
+      received: number
+      /** Zero when the size is not known. */
+      total: number
+    }
+  | { stage: "installing"; version: string }
 
 export const IPC = {
   listConnections: "connections:list",
@@ -1195,4 +1238,8 @@ export const IPC = {
   stopChat: "chats:stop",
   answerApproval: "chats:approval",
   chatEvent: "chats:event",
+  appVersion: "app:version",
+  checkForUpdate: "update:check",
+  installUpdate: "update:install",
+  updateProgress: "update:progress",
 } as const

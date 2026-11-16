@@ -48,6 +48,7 @@
     "clsx": "^2.1.1",
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
+    "electron-updater": "^6.8.11",
     "esbuild": "^0.28.1",
     "lucide-react": "^1.27.0",
     "react": "19.2.4",
@@ -68,6 +69,7 @@
   "trustedDependencies": [
     "electron"
   ],
+  "//build.publish": "Never used to upload — release.yml runs electron-builder with --publish never and publishes with gh. A publish provider is what makes electron-builder write app-update.yml into the bundle and latest-mac.yml beside the zips, which the macOS in-app update reads (src/main/electron-updates.ts). Squirrel.Mac installs from a zip, never a dmg, hence the mac zip target. This note lives outside `build` because electron-builder rejects unknown keys there.",
   "build": {
     "appId": "vn.app.veylens",
     "productName": "Vey Lens",
@@ -79,12 +81,24 @@
       "output": "release",
       "buildResources": "resources"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "veystudioapp",
+      "repo": "veylens"
+    },
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "resources/icon.png",
       "target": [
         {
           "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "arm64",
             "x64"

@@ -1,7 +1,9 @@
+import path from "node:path"
+
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 
 import { addressOf } from "../shared/address"
-import { IPC, type AuditStatus, type DesktopApi } from "../shared/api"
+import { IPC, type AuditStatus, type DesktopApi, type UpdateProgress } from "../shared/api"
 import { toolInfo } from "../shared/agent"
 import { describePermissions } from "../shared/permissions"
 import { errorOffset, withErrorOffset } from "../shared/sql-errors"
@@ -13,7 +15,24 @@ import type { Chats } from "./chats"
 import type { Connections } from "./connections"
 import type { Library } from "./library"
 import { bare, explained } from "./db/types"
+import { installMacUpdate } from "./electron-updates"
+import {
+  checkForUpdate,
+  downloadWindowsUpdate,
+  releaseFeedUrl,
+  startWindowsInstaller,
+} from "./updater"
 import { applyUserChanges, runUserQuery } from "./user-queries"
+
+/** What the update handlers need from the app itself. */
+export type UpdateHost = {
+  version: string
+  packaged: boolean
+  dataDir: string
+  progress: (event: UpdateProgress) => void
+  /** Quits the app, then runs `task` at `will-quit`. */
+  quitAndRun: (task: () => void) => void
+}
 
 /** Rows one page of a table may hold, whatever the page asks for. */
 const PAGE_ROWS = 1000
@@ -43,12 +62,14 @@ export function registerIpc({
   library,
   assist,
   audit,
+  updates,
 }: {
   connections: Connections
   chats: Chats
   library: Library
   assist: Assist
   audit: AuditLog
+  updates: UpdateHost
 }): void {
   const nameOf = (connectionId: string) =>
     connections.list().find((item) => item.id === connectionId)?.name ?? null
@@ -268,6 +289,43 @@ export function registerIpc({
     stopChat: (chatId) => chats.stop(chatId),
     answerApproval: async (chatId, toolId, allow) =>
       chats.answerApproval(chatId, toolId, allow),
+
+    appVersion: async () => updates.version,
+    checkForUpdate: () => checkForUpdate(updates.version, process.platform),
+    installUpdate: async (version) => {
+      const platform = process.platform
+      if (platform !== "darwin" && platform !== "win32") {
+        throw new Error("There is no in-app installer for this platform — open the release page instead.")
+      }
+      if (!updates.packaged) {
+        throw new Error("This is a development build — pull and restart instead.")
+      }
+      // It reaches a URL and a file name, so it is checked, not trusted.
+      if (typeof version !== "string" || !/^[0-9A-Za-z.+-]{1,64}$/.test(version)) {
+        throw new Error(`Not a version: ${String(version)}`)
+      }
+      const onProgress = (received: number, total: number) =>
+        updates.progress({ stage: "downloading", version, received, total })
+      const onInstalling = () => updates.progress({ stage: "installing", version })
+      if (platform === "darwin") {
+        await installMacUpdate({
+          version,
+          feedUrl: releaseFeedUrl(version),
+          log: path.join(updates.dataDir, "update.log"),
+          onProgress,
+          onInstalling,
+        })
+        return
+      }
+      const installer = await downloadWindowsUpdate({
+        version,
+        arch: process.arch,
+        dir: path.join(updates.dataDir, "updates"),
+        onProgress,
+      })
+      onInstalling()
+      updates.quitAndRun(() => startWindowsInstaller(installer))
+    },
   }
 
   for (const [name, handler] of Object.entries(handlers)) {

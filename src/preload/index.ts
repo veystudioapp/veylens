@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron"
 
-import { IPC, type ChatEvent, type DesktopApi } from "../shared/api"
+import {
+  IPC,
+  type ChatEvent,
+  type DesktopApi,
+  type UpdateProgress,
+} from "../shared/api"
 
 const api: DesktopApi = {
   platform: process.platform as DesktopApi["platform"],
@@ -79,6 +84,18 @@ const api: DesktopApi = {
     ipcRenderer.on(IPC.chatEvent, handler)
     return () => {
       ipcRenderer.off(IPC.chatEvent, handler)
+    }
+  },
+
+  appVersion: () => ipcRenderer.invoke(IPC.appVersion),
+  checkForUpdate: () => ipcRenderer.invoke(IPC.checkForUpdate),
+  installUpdate: (version) => ipcRenderer.invoke(IPC.installUpdate, version),
+  onUpdateProgress: (listener) => {
+    const handler = (_event: IpcRendererEvent, payload: UpdateProgress) =>
+      listener(payload)
+    ipcRenderer.on(IPC.updateProgress, handler)
+    return () => {
+      ipcRenderer.off(IPC.updateProgress, handler)
     }
   },
 }

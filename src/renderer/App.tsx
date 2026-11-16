@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/resizable"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useStore } from "@/lib/store"
+import { useUpdateWatch } from "@/lib/updates"
 
 import { ChatPanel } from "./components/ChatPanel"
 import { ConfirmHost } from "./components/confirm"
@@ -31,6 +32,7 @@ export function App() {
   useEffect(() => {
     void init()
   }, [init])
+  useUpdateWatch()
 
   const toggle = (panel: typeof explorer) => {
     if (panel.current?.isCollapsed()) panel.current.expand()

@@ -1,4 +1,5 @@
 import {
+  ArrowUpCircle,
   ArrowUpRight,
   BookOpen,
   Languages,
@@ -81,6 +82,7 @@ import { ACCESS_DETAIL, ACCESS_ICON, ACCESS_LABEL } from "@/lib/access"
 import { useAgentModels } from "@/lib/models"
 import { errorMessage, useStore, type SettingsSection } from "@/lib/store"
 import { connectionTone, IconTile, KIND_TONE } from "@/lib/tones"
+import { installLabel, pendingUpdate, useUpdates } from "@/lib/updates"
 import { cn } from "@/lib/utils"
 
 import { AuditLogPage } from "./AuditLogPage"
@@ -91,6 +93,7 @@ import { ModelMenu, type NoModelRow } from "./model-menu"
 import { SimpleSelect } from "./simple-select"
 import { ErrorNote } from "./state-view"
 import { Switch } from "./switch"
+import { UpdateProgressBar, updateExplanation } from "./update-pill"
 
 // ── Pieces ─────────────────────────────────────────────────────────────────
 
@@ -1482,6 +1485,86 @@ function AiPage() {
   )
 }
 
+// ── Updates ────────────────────────────────────────────────────────────────
+
+function UpdatesPage() {
+  const check = useUpdates((state) => state.check)
+  const checking = useUpdates((state) => state.checking)
+  const installing = useUpdates((state) => state.installing)
+  const progress = useUpdates((state) => state.progress)
+  const error = useUpdates((state) => state.error)
+  const refresh = useUpdates((state) => state.refresh)
+  const install = useUpdates((state) => state.install)
+  // Dismissal is ignored here: somebody on this page has come to ask.
+  const update = useUpdates((state) => pendingUpdate(state, false))
+
+  const status = !check
+    ? "Checking…"
+    : check.status === "current"
+      ? "This is the latest version."
+      : check.status === "unknown"
+        ? `Could not check for updates: ${check.error}`
+        : `Version ${check.version} is available.`
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <PageHeader title="Updates">
+        Vey Lens checks GitHub for a new release when it opens and every six
+        hours after. Nothing is downloaded until you press install.
+      </PageHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        <section className="pt-5">
+          <div className="flex items-center gap-3 rounded-lg border px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">
+                Vey Lens {check?.current || "…"}
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">{status}</div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={checking || installing}
+              onClick={() => void refresh()}
+            >
+              {checking ? <Spinner /> : <RotateCcw />}
+              Check now
+            </Button>
+          </div>
+        </section>
+
+        {update && (
+          <section className="pt-5">
+            <div className="flex flex-col gap-3 rounded-lg border px-4 py-3">
+              <div className="text-[13px] font-medium">Vey Lens {update.version}</div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {updateExplanation(update.version, update.installable)}
+              </p>
+              {installing && <UpdateProgressBar progress={progress} />}
+              {error && <p className="text-xs leading-relaxed text-destructive">{error}</p>}
+              <div className="flex items-center gap-2">
+                {update.installable && (
+                  <Button size="sm" disabled={installing} onClick={() => void install()}>
+                    {installLabel(installing, progress)}
+                  </Button>
+                )}
+                <Button
+                  variant={update.installable ? "outline" : "default"}
+                  size="sm"
+                  render={<a href={update.url} target="_blank" rel="noreferrer" />}
+                >
+                  {update.installable ? `What’s new in ${update.version}` : "Open the release"}
+                  <ArrowUpRight />
+                </Button>
+              </div>
+            </div>
+          </section>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── The dialog ─────────────────────────────────────────────────────────────
 
 const NAV: {
@@ -1502,6 +1585,10 @@ const NAV: {
       { id: "permissions", label: "Permissions", icon: ShieldCheck, tone: "green" },
       { id: "audit", label: "Audit log", icon: History, tone: "teal" },
     ],
+  },
+  {
+    heading: "App",
+    items: [{ id: "updates", label: "Updates", icon: ArrowUpCircle, tone: "blue" }],
   },
 ]
 
@@ -1558,6 +1645,8 @@ export function SettingsDialog({
           <ToolsPage />
         ) : section === "audit" ? (
           <AuditLogPage />
+        ) : section === "updates" ? (
+          <UpdatesPage />
         ) : (
           <PermissionsPage onTools={() => onSection("tools")} />
         )}

@@ -110,8 +110,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.name }}
+          # The macOS zips and latest-mac.yml are the in-app update's feed
+          # (src/main/electron-updates.ts); the dmgs are for a first install.
+          # No blockmaps: the update downloads whole files.
           path: |
             release/*.dmg
+            release/*.zip
+            release/latest-mac.yml
             release/*.AppImage
             release/*.exe
           if-no-files-found: error

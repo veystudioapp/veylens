@@ -32,6 +32,10 @@ const secrets: Secrets = {
 
 let mainWindow: BrowserWindow | null = null
 
+/** An update's installer, run at `will-quit` — after `before-quit` has closed
+ * the chats and connections. */
+let quitTask: (() => void) | null = null
+
 function broadcast(event: ChatEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed()) window.webContents.send(IPC.chatEvent, event)
@@ -97,7 +101,27 @@ void app.whenReady().then(() => {
   const audit = new AuditLog(dataDir, broadcast)
   const chats = new Chats(dataDir, connections, library, broadcast, audit)
   const assist = new Assist(dataDir, connections, library)
-  registerIpc({ connections, chats, library, assist, audit })
+  registerIpc({
+    connections,
+    chats,
+    library,
+    assist,
+    audit,
+    updates: {
+      version: app.getVersion(),
+      packaged: app.isPackaged,
+      dataDir,
+      progress: (event) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) window.webContents.send(IPC.updateProgress, event)
+        }
+      },
+      quitAndRun: (task) => {
+        quitTask = task
+        app.quit()
+      },
+    },
+  })
 
   // In dev the app runs inside the stock Electron bundle, so the Dock shows
   // Electron's atom. A packaged build has the icon baked into its bundle (and
@@ -116,6 +140,16 @@ void app.whenReady().then(() => {
     assist.cancelAll()
     void connections.closeAll()
   })
+})
+
+app.on("will-quit", () => {
+  const task = quitTask
+  quitTask = null
+  try {
+    task?.()
+  } catch (error) {
+    console.error("The quit task failed:", error)
+  }
 })
 
 app.on("window-all-closed", () => {

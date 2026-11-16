@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils"
 import { confirm } from "./confirm"
 import { IconButton } from "./icon-button"
 import { promptText } from "./prompt"
+import { UpdatePill } from "./update-pill"
 
 const ENGINE_LABEL = { postgres: "PostgreSQL", mysql: "MySQL" } as const
 
@@ -647,15 +648,16 @@ export function Explorer({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-sidebar-border p-1.5">
+      <div className="flex shrink-0 items-center gap-1 border-t border-sidebar-border p-1.5">
         <button
           type="button"
           onClick={onSettings}
-          className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-foreground"
+          className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-foreground"
         >
           <Settings className="size-3.5" />
           Settings
         </button>
+        <UpdatePill />
       </div>
     </div>
   )
