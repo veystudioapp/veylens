@@ -4,8 +4,11 @@
  * guards. Shared: the main process refuses on it, the renderer asks before
  * it and explains.
  *
- * The SQL is read, not run, so this is best effort: a view, a function or a
- * dynamic statement can reach a table whose name is not in the text. The
+ * The SQL is read, not run, so this is best effort. When something is hidden,
+ * what is known to reach a table without naming it is refused (SQL run from
+ * text, DO blocks, file reads, a moved search path, value catalogs), and the
+ * guard hides views over hidden tables from the server's catalog. A function
+ * the database already has can still read anything its body does. The
  * database user's own grants are the boundary that cannot be talked around;
  * these are the app's, on top.
  */
@@ -47,13 +50,19 @@ export const OBJECT_LABEL: Record<ObjectAccess, string> = {
   hidden: "Hidden",
   read: "Read only",
   write: "Writable",
+  schema: "Structure only",
 }
 
 export const OBJECT_DETAIL: Record<ObjectAccess, string> = {
   hidden: "Not listed, not described, and refused in any statement that names it — the assistant does not see it either.",
   read: "Read as usual; a statement or an edit that writes to it is refused.",
   write: "As the connection allows — for a table inside a schema set otherwise.",
+  schema: "Listed and described; its data refused in any statement that names it.",
 }
+
+export const AI_SCHEMA_ONLY_LABEL = "AI: structure only"
+export const AI_SCHEMA_ONLY_DETAIL =
+  "The assistant sees its columns, types and keys, but cannot read its rows — nor a view built on it. You still can."
 
 export const DEFAULT_GUARDS: Guards = {
   requireWhere: false,
@@ -86,12 +95,17 @@ export function checkPermissions(raw: unknown): Permissions {
   const objects: ObjectRule[] = []
   for (const item of Array.isArray(given.objects) ? given.objects : []) {
     if (!item || typeof item.schema !== "string" || !item.schema.trim()) continue
-    if (!OBJECT_ACCESS.includes(item.access)) continue
+    if (!(OBJECT_ACCESS as readonly string[]).includes(item.access)) continue
     const table = typeof item.table === "string" && item.table.trim() ? item.table.trim() : null
     const key = `${item.schema.trim().toLowerCase()}.${table?.toLowerCase() ?? "*"}`
     if (seen.has(key)) continue
     seen.add(key)
-    objects.push({ schema: item.schema.trim(), table, access: item.access })
+    objects.push({
+      schema: item.schema.trim(),
+      table,
+      access: item.access,
+      ...(item.aiSchemaOnly === true ? { aiSchemaOnly: true } : {}),
+    })
   }
   const guards = (given.guards ?? {}) as Partial<Guards>
   return {
@@ -367,6 +381,9 @@ export function referencesIn(tokens: Token[], defaultSchema: string): Reference[
       list = true
     } else if (word === "copy" && index === 0) {
       written = cls === "insert"
+    } else if (word === "handler" && index === 0) {
+      // MySQL's HANDLER t OPEN / READ: reads a table with no FROM.
+      written = false
     } else if (word === "using" && cls === "delete") {
       written = false
       list = true
@@ -390,6 +407,157 @@ export function referencesIn(tokens: Token[], defaultSchema: string): Reference[
     }
   }
   return found
+}
+
+// ── Reaching a table without naming it ─────────────────────────────────────
+
+/** Functions that run SQL handed to them as text, dump whole tables or
+ * schemas, read the server's files or another database, or decode the WAL:
+ * what they read is not in the statement's names. */
+const OPAQUE_FUNCTIONS = new Set([
+  // Postgres: SQL or a table given as text.
+  "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema",
+  "table_to_xml", "table_to_xmlschema", "table_to_xml_and_xmlschema",
+  "schema_to_xml", "schema_to_xmlschema", "schema_to_xml_and_xmlschema",
+  "database_to_xml", "database_to_xmlschema", "database_to_xml_and_xmlschema",
+  "cursor_to_xml", "ts_stat",
+  // Postgres: another database.
+  "dblink", "dblink_exec", "dblink_open", "dblink_fetch", "dblink_send_query", "dblink_get_result",
+  // Postgres: the server's files, large objects and the WAL.
+  "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file",
+  "lo_import", "lo_export", "lo_get", "lo_open", "loread",
+  "pg_logical_slot_get_changes", "pg_logical_slot_peek_changes",
+  "pg_logical_slot_get_binary_changes", "pg_logical_slot_peek_binary_changes",
+  // Postgres: a setting such as search_path, which moves where a bare name is looked for.
+  "set_config",
+  // MySQL: the server's files.
+  "load_file",
+])
+
+/** Catalogs that hold sample values from every table's columns. */
+const VALUE_CATALOGS = new Set([
+  "pg_stats", "pg_statistic", "pg_stats_ext", "pg_stats_ext_exprs", "pg_statistic_ext_data",
+  "column_statistics",
+])
+
+/**
+ * Why a statement could read a table it does not name: SQL run from text,
+ * a code block, a file, a moved search path, a catalog of sample values.
+ * Only asked when something is hidden — otherwise there is nothing to reach.
+ */
+function opaqueIn(tokens: Token[], engine: Engine, defaultSchema: string): string[] {
+  const reasons: string[] = []
+  const first = lower(tokens.find((token) => token.text !== "("))
+  const second = lower(tokens[tokens.findIndex((token) => token.text !== "(") + 1])
+  if (first === "do") {
+    reasons.push("A DO block runs code this app cannot read.")
+  }
+  if (engine === "mysql" && first === "prepare") {
+    reasons.push("PREPARE … FROM runs SQL given as text, so the tables it reads cannot be checked.")
+  }
+  if (engine === "mysql" && first === "use") {
+    reasons.push("USE changes which database a bare table name is looked for in.")
+  }
+  if (first === "set" || first === "reset") {
+    const words = tokens.slice(1, 4).map(lower)
+    if (words.includes("search_path") || words.includes("schema")) {
+      reasons.push("Changing search_path moves where a bare table name is looked for.")
+    }
+  }
+  if (engine === "postgres" && first === "create") {
+    // CREATE [OR REPLACE] FUNCTION|PROCEDURE: a body in a string, read by no one here.
+    const kind = second === "or" ? lower(tokens[tokens.findIndex((token) => token.text !== "(") + 3]) : second
+    if (kind === "function" || kind === "procedure") {
+      reasons.push("A function's body is text this app cannot read, so the tables it reads cannot be checked.")
+    }
+  }
+  for (let index = 0; index < tokens.length - 1; index++) {
+    const name = lower(tokens[index])
+    if (name && tokens[index + 1]!.text === "(" && OPAQUE_FUNCTIONS.has(name)) {
+      reasons.push(`${name}(…) reads data without naming the table, so it cannot be checked.`)
+    }
+  }
+  for (const ref of referencesIn(tokens, defaultSchema)) {
+    if (VALUE_CATALOGS.has(ref.table.toLowerCase())) {
+      reasons.push(`${ref.table} holds sample values from every table's columns, hidden ones too.`)
+    }
+  }
+  return reasons
+}
+
+/** How far an object's data is kept from whoever asks: 2 hidden, 1 only its
+ * structure shown, 0 readable. */
+const RESTRICTION: Record<ObjectAccess, number> = { write: 0, read: 0, schema: 1, hidden: 2 }
+const RESTRICTED: ObjectAccess[] = ["write", "schema", "hidden"]
+
+/** Whether some data is kept from whoever asks: what is hidden, or shown as
+ * structure only. */
+const hidesSomething = (permissions: Permissions) =>
+  permissions.objects.some((rule) => RESTRICTION[rule.access] > 0)
+
+/** Whether a statement may read this object's rows. */
+export const dataReadable = (access: ObjectAccess) => RESTRICTION[access] === 0
+
+/**
+ * The permissions as the assistant meets them: every rule marked
+ * `aiSchemaOnly` — or inside a schema so marked — shows structure only. What
+ * is hidden stays hidden. The stricter wins: a table's own rule cannot give
+ * the assistant data its schema keeps from it.
+ */
+export function forAssistant(permissions: Permissions): Permissions {
+  if (!permissions.objects.some((rule) => rule.aiSchemaOnly)) return permissions
+  const schemaMarked = new Set(
+    permissions.objects
+      .filter((rule) => rule.table === null && rule.aiSchemaOnly)
+      .map((rule) => rule.schema.toLowerCase())
+  )
+  return {
+    ...permissions,
+    objects: permissions.objects.map(({ aiSchemaOnly, ...rule }) =>
+      rule.access !== "hidden" && (aiSchemaOnly || schemaMarked.has(rule.schema.toLowerCase()))
+        ? { ...rule, access: "schema" as const }
+        : rule
+    ),
+  }
+}
+
+/**
+ * The permissions with every view that reads a hidden table — directly, or
+ * through another such view — hidden too, and every view over one shown as
+ * structure only shown so too. `sources` is each view and a table or view it
+ * reads, from the server's catalog.
+ */
+export function hideDependentViews(
+  permissions: Permissions,
+  sources: { view: TableRef; source: TableRef }[]
+): Permissions {
+  if (!hidesSomething(permissions) || sources.length === 0) return permissions
+  const key = (ref: TableRef) => `${ref.schema.toLowerCase()}.${ref.table.toLowerCase()}`
+  const raised = new Map<string, { view: TableRef; level: number }>()
+  const level = (ref: TableRef) =>
+    Math.max(raised.get(key(ref))?.level ?? 0, RESTRICTION[objectAccess(permissions, ref)])
+  for (let changed = true; changed; ) {
+    changed = false
+    for (const { view, source } of sources) {
+      const from = level(source)
+      if (from > level(view)) {
+        raised.set(key(view), { view, level: from })
+        changed = true
+      }
+    }
+  }
+  if (raised.size === 0) return permissions
+  return {
+    ...permissions,
+    objects: [
+      ...[...raised.values()].map(({ view, level }) => ({
+        schema: view.schema,
+        table: view.table,
+        access: RESTRICTED[level]!,
+      })),
+      ...permissions.objects.filter((rule) => rule.table === null || !raised.has(key({ schema: rule.schema, table: rule.table }))),
+    ],
+  }
 }
 
 /** Whether an UPDATE or DELETE has a WHERE anywhere in it. */
@@ -460,6 +628,9 @@ export type Context = {
 
 const quoteRef = (ref: { schema: string; table: string }) => `${ref.schema}.${ref.table}`
 
+const structureOnly = (ref: { schema: string; table: string }) =>
+  `${quoteRef(ref)} shows the assistant its structure only: its data cannot be read. Work from its columns, or ask the user to look at the rows themselves.`
+
 /**
  * What the permissions say of some SQL, statement by statement: allowed,
  * to be asked about, or blocked — and why.
@@ -473,12 +644,19 @@ export function judge(sql: string, context: Context): Verdict {
     rule = stricter(rule, to)
     if (!reasons.includes(reason)) reasons.push(reason)
   }
+  const hiding = hidesSomething(permissions)
   for (const tokens of tokenize(sql, context.engine)) {
     const cls = classify(tokens)
     for (const ref of referencesIn(tokens, context.defaultSchema)) {
       const allowed = objectAccess(permissions, ref)
       if (allowed === "hidden") raise("block", `${quoteRef(ref)} is hidden on this connection.`)
+      else if (allowed === "schema") raise("block", structureOnly(ref))
       else if (ref.written && allowed === "read") raise("block", `${quoteRef(ref)} is read-only on this connection.`)
+    }
+    if (hiding) {
+      for (const reason of opaqueIn(tokens, context.engine, context.defaultSchema)) {
+        raise("block", `${reason} This connection hides tables, so it is refused.`)
+      }
     }
     if (cls === "read" || cls === "session") continue
     const writeKinds: StatementKind[] = cls === "other" ? [...STATEMENT_KINDS] : [cls]
@@ -523,7 +701,8 @@ export function judgeChanges(changes: ChangeSet, context: Omit<Context, "engine"
   }
   const ref = { schema: changes.schema, table: changes.table }
   const allowed = objectAccess(permissions, ref)
-  if (allowed !== "write") raise("block", `${quoteRef(ref)} is ${allowed === "hidden" ? "hidden" : "read-only"} on this connection.`)
+  if (allowed === "schema") raise("block", structureOnly(ref))
+  else if (allowed !== "write") raise("block", `${quoteRef(ref)} is ${allowed === "hidden" ? "hidden" : "read-only"} on this connection.`)
   const counts: [StatementKind, number][] = [
     ["update", changes.updates.length],
     ["insert", changes.inserts.length],
@@ -556,16 +735,23 @@ export function judgeChanges(changes: ChangeSet, context: Omit<Context, "engine"
 export const defaultSchemaOf = (connection: { engine: Engine; database: string }) =>
   connection.engine === "postgres" ? "public" : connection.database
 
-/** The hidden tables some SQL names, as reasons to refuse it — for a dry
+/** The hidden and structure-only tables some SQL names, and what reaches a
+ * table without naming it, as reasons to refuse it — for a read, or a dry
  * run, which changes nothing but may still show what is in them. */
 export function hiddenIn(sql: string, context: Context): string[] {
   const reasons: string[] = []
+  if (!hidesSomething(context.permissions)) return reasons
+  const add = (reason: string) => {
+    if (!reasons.includes(reason)) reasons.push(reason)
+  }
   for (const tokens of tokenize(sql, context.engine)) {
     for (const ref of referencesIn(tokens, context.defaultSchema)) {
-      const reason = `${quoteRef(ref)} is hidden on this connection.`
-      if (objectAccess(context.permissions, ref) === "hidden" && !reasons.includes(reason)) {
-        reasons.push(reason)
-      }
+      const access = objectAccess(context.permissions, ref)
+      if (access === "hidden") add(`${quoteRef(ref)} is hidden on this connection.`)
+      else if (access === "schema") add(structureOnly(ref))
+    }
+    for (const reason of opaqueIn(tokens, context.engine, context.defaultSchema)) {
+      add(`${reason} This connection hides tables, so it is refused.`)
     }
   }
   return reasons
@@ -582,6 +768,14 @@ export function describePermissions(permissions: Permissions, access: AccessMode
   const read = permissions.objects.filter((rule) => rule.access === "read")
   if (read.length && access !== "read_only") {
     lines.push(`read-only: ${read.map((rule) => `${rule.schema}.${rule.table ?? "*"}`).join(", ")}`)
+  }
+  const structure = permissions.objects.filter(
+    (rule) => rule.access !== "hidden" && (rule.aiSchemaOnly || rule.access === "schema")
+  )
+  if (structure.length) {
+    lines.push(
+      `structure only for the assistant (columns can be described, rows cannot be read — not even through a view or an aggregate): ${structure.map((rule) => `${rule.schema}.${rule.table ?? "*"}`).join(", ")}`
+    )
   }
   const { guards } = permissions
   if (guards.requireWhere) lines.push("UPDATE and DELETE need a WHERE")

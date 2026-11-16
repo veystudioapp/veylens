@@ -61,6 +61,8 @@ import {
   type TreeSchema,
 } from "@shared/api"
 import {
+  AI_SCHEMA_ONLY_DETAIL,
+  AI_SCHEMA_ONLY_LABEL,
   OBJECT_LABEL,
   RULE_LABEL,
   STATEMENT_HINT,
@@ -761,6 +763,7 @@ const OBJECT_TONE: Record<ObjectAccess, string> = {
   hidden: "text-[var(--tone-red)]",
   read: "text-[var(--tone-blue)]",
   write: "text-[var(--tone-green)]",
+  schema: "text-[var(--tone-amber)]",
 }
 
 const ALL_TABLES = "\u0000all"
@@ -776,8 +779,12 @@ function permissionSummary(permissions: Permissions, access: AccessMode): string
   }
   const hidden = permissions.objects.filter((rule) => rule.access === "hidden").length
   const read = permissions.objects.filter((rule) => rule.access === "read").length
+  const aiSchemaOnly = permissions.objects.filter(
+    (rule) => rule.aiSchemaOnly && rule.access !== "hidden"
+  ).length
   if (hidden) out.push(`${hidden} hidden`)
   if (read) out.push(`${read} read only`)
+  if (aiSchemaOnly) out.push(`${aiSchemaOnly} structure only for AI`)
   const { guards } = permissions
   if (guards.requireWhere) out.push("WHERE required")
   if (guards.maxAffected !== null) out.push(`≤ ${guards.maxAffected.toLocaleString()} rows changed`)
@@ -933,6 +940,34 @@ function ObjectRules({
                   className: OBJECT_TONE[access],
                 }))}
               />
+              {/* Hidden already keeps everything from the assistant. */}
+              <div className="flex w-[148px] shrink-0 justify-end">
+                {rule.access !== "hidden" && (
+                  <label
+                    title={AI_SCHEMA_ONLY_DETAIL}
+                    className={cn(
+                      "flex items-center gap-1.5 text-[11px]",
+                      rule.aiSchemaOnly ? "text-[var(--tone-amber)]" : "text-muted-foreground"
+                    )}
+                  >
+                    <Sparkles className="size-3" />
+                    {AI_SCHEMA_ONLY_LABEL}
+                    <Switch
+                      checked={rule.aiSchemaOnly === true}
+                      label={`${AI_SCHEMA_ONLY_LABEL}: ${rule.schema}.${rule.table ?? "*"}`}
+                      onChange={(on) =>
+                        onChange(
+                          permissions.objects.map((item) => {
+                            if (item !== rule) return item
+                            const { aiSchemaOnly: _, ...rest } = item
+                            return on ? { ...rest, aiSchemaOnly: true } : rest
+                          })
+                        )
+                      }
+                    />
+                  </label>
+                )}
+              </div>
               <IconButton
                 label={`Remove the rule on ${rule.schema}.${rule.table ?? "*"}`}
                 onClick={() => onChange(permissions.objects.filter((item) => item !== rule))}

@@ -282,7 +282,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
     const bound = params
       ? bindParameters(sql, params, engineOf(connectionId))
       : { text: sql, values: [] }
-    const result = await host.connections.driver(connectionId).query(bound.text, {
+    const result = await host.connections.assistantDriver(connectionId).query(bound.text, {
       readOnly: true,
       maxRows: CHART_ROWS,
       timeoutMs: QUERY_TIMEOUT_MS,
@@ -435,7 +435,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
         async (args) => {
           try {
             const target = resolve(args.connection)
-            const tree = await host.connections.driver(target.id).tree()
+            const tree = await host.connections.assistantDriver(target.id).tree()
             const needle = args.search?.toLowerCase()
             const lines: string[] = []
             let listed = 0
@@ -487,7 +487,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
         async (args) => {
           try {
             const target = resolve(args.connection)
-            const driver = host.connections.driver(target.id)
+            const driver = host.connections.assistantDriver(target.id)
             const tree = await driver.tree()
             const parts = await Promise.all(
               args.tables.map(async (name) => {
@@ -537,7 +537,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
         async (args) => {
           try {
             const target = resolve(args.connection)
-            const result = await host.connections.driver(target.id).query(args.sql, {
+            const result = await host.connections.assistantDriver(target.id).query(args.sql, {
               readOnly: true,
               maxRows: args.max_rows ?? DEFAULT_ROWS,
               timeoutMs: QUERY_TIMEOUT_MS,
@@ -603,7 +603,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
             const target = resolve(args.connection)
             host.connections.assertWritable(target.id)
             approved("execute_sql", args)
-            const result = await host.connections.driver(target.id).query(args.sql, {
+            const result = await host.connections.assistantDriver(target.id).query(args.sql, {
               readOnly: false,
               maxRows: DEFAULT_ROWS,
             })
@@ -813,7 +813,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
               }
             } else if (args.kind === "select" || args.kind === "multi_select") {
               if (!args.options_sql?.trim()) throw new Error(`A ${args.kind} needs options_sql.`)
-              const choices = await host.connections.driver(target.id).query(args.options_sql, {
+              const choices = await host.connections.assistantDriver(target.id).query(args.options_sql, {
                 readOnly: true,
                 maxRows: 1000,
                 timeoutMs: QUERY_TIMEOUT_MS,
@@ -1149,7 +1149,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
           try {
             const target = resolve(args.connection)
             if (args.table) {
-              const tree = await host.connections.driver(target.id).tree()
+              const tree = await host.connections.assistantDriver(target.id).tree()
               const ref = locate(tree, args.table, args.schema)
               host.open({ kind: "table", connectionId: target.id, ...ref })
               return ok(`Opened ${ref.schema}.${ref.table} in the viewer.`)

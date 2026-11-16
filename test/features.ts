@@ -37,8 +37,13 @@ import {
   checkPermissions,
   classify,
   DEFAULT_PERMISSIONS,
+  describePermissions,
+  forAssistant,
+  hiddenIn,
+  hideDependentViews,
   judge,
   judgeChanges,
+  objectAccess,
   referencesIn,
   tokenize,
   visibleTree,
@@ -1057,7 +1062,9 @@ await check("permissions: blocked, asked and allowed, the access mode the floor"
   assert.match(on("UPDATE x.y SET a = 1").reasons.join(), /without WHERE/)
   // Something it cannot read the effect of takes the strictest rule.
   assert.equal(on("CALL do_things()").rule, "block")
-  assert.equal(on("SELECT 1; BEGIN; SET search_path = x").rule, "allow")
+  assert.equal(on("SELECT 1; BEGIN; SET statement_timeout = 0").rule, "allow")
+  // With a table hidden, moving where bare names are looked for is not.
+  assert.equal(on("SET search_path = x").rule, "block")
   const edits = judgeChanges(
     { schema: "public", table: "orders", updates: [], inserts: [{}], deletes: [] },
     { permissions: strict, access: "read_write" }
@@ -1104,6 +1111,146 @@ await check("permissions: a hidden table is gone from the tree and refused every
     assert.doesNotMatch(text(await call("list_tables", { connection: "Shop" })), /audit_log/)
   } finally {
     connections.setPermissions(shop.id, allow)
+  }
+})
+
+await check("permissions: a hidden table cannot be reached without naming it", () => {
+  const hiding = checkPermissions({ objects: [{ schema: "public", table: "salaries", access: "hidden" }] })
+  const pgHiding = { permissions: hiding, access: "read_write" as const, engine: "postgres" as const, defaultSchema: "public" }
+  const myHiding = {
+    permissions: checkPermissions({ objects: [{ schema: "app", table: "salaries", access: "hidden" }] }),
+    access: "read_write" as const,
+    engine: "mysql" as const,
+    defaultSchema: "app",
+  }
+  const refused = [
+    [pgHiding, "select query_to_xml('select * from salaries', true, false, '')"],
+    [pgHiding, "select table_to_xml('salaries'::regclass, true, false, '')"],
+    [pgHiding, "select database_to_xml(true, false, '')"],
+    [pgHiding, "select * from dblink('dbname=x', 'select * from salaries') as t(a int)"],
+    [pgHiding, "select pg_catalog.pg_read_file('base/16384/12345')"],
+    [pgHiding, "select * from ts_stat('select to_tsvector(note) from salaries')"],
+    [pgHiding, "DO $$ BEGIN PERFORM * FROM salaries; END $$"],
+    [pgHiding, "CREATE OR REPLACE FUNCTION f() RETURNS int LANGUAGE sql AS $$ select 1 $$"],
+    [pgHiding, "SET search_path = secret, public"],
+    [pgHiding, "select set_config('search_path', 'secret', false)"],
+    [pgHiding, "select most_common_vals from pg_stats where tablename = 'x'"],
+    [myHiding, "PREPARE s FROM 'select * from salaries'; EXECUTE s"],
+    [myHiding, "USE other"],
+    [myHiding, "HANDLER salaries OPEN"],
+    [myHiding, "select LOAD_FILE('/etc/hosts')"],
+    [myHiding, "select * from information_schema.COLUMN_STATISTICS"],
+  ] as const
+  for (const [context, sql] of refused) {
+    assert.ok(hiddenIn(sql, context).length > 0, `read: ${sql}`)
+    assert.equal(judge(sql, context).rule, "block", `judged: ${sql}`)
+  }
+  // Nothing hidden: none of it is this check's business.
+  const open = { ...pgHiding, permissions: DEFAULT_PERMISSIONS }
+  assert.deepEqual(hiddenIn("select query_to_xml('select 1', true, false, '')", open), [])
+  assert.equal(judge("SET search_path = x", open).rule, "allow")
+  // Hidden, but plain SQL over other tables goes through.
+  for (const sql of ["select * from orders o join customers c on c.id = o.customer_id", "select count(*), extract(year from created_at) from orders group by 2", "SET statement_timeout = 1000"]) {
+    assert.deepEqual(hiddenIn(sql, pgHiding), [], sql)
+  }
+})
+
+await check("permissions: a view over a hidden table is hidden with it", async () => {
+  const sources = [
+    { view: { schema: "public", table: "v_pay" }, source: { schema: "public", table: "salaries" } },
+    { view: { schema: "report", table: "v_pay_summary" }, source: { schema: "public", table: "v_pay" } },
+    { view: { schema: "public", table: "v_orders" }, source: { schema: "public", table: "orders" } },
+  ]
+  const permissions = checkPermissions({
+    objects: [
+      { schema: "public", table: "salaries", access: "hidden" },
+      { schema: "report", table: "v_pay_summary", access: "read" },
+    ],
+  })
+  const derived = hideDependentViews(permissions, sources)
+  assert.equal(objectAccess(derived, { schema: "public", table: "v_pay" }), "hidden")
+  assert.equal(objectAccess(derived, { schema: "report", table: "v_pay_summary" }), "hidden")
+  assert.equal(objectAccess(derived, { schema: "public", table: "v_orders" }), "write")
+  assert.equal(hideDependentViews(DEFAULT_PERMISSIONS, sources), DEFAULT_PERMISSIONS)
+
+  // Against the server: its catalog says what a view reads.
+  await driver.query("CREATE VIEW audit_view AS SELECT * FROM audit_log", { readOnly: false, maxRows: 1 })
+  await driver.query("CREATE VIEW audit_view_2 AS SELECT count(*) AS n FROM audit_view", { readOnly: false, maxRows: 1 })
+  connections.setPermissions(shop.id, { ...allow, objects: [{ schema: "public", table: "audit_log", access: "hidden" }] })
+  try {
+    const guarded = connections.driver(shop.id)
+    const names = (await guarded.tree()).flatMap((schema) => schema.tables.map((table) => table.name))
+    assert.ok(!names.includes("audit_view") && !names.includes("audit_view_2") && names.includes("orders"), names.join())
+    await assert.rejects(runUserQuery(connections, shop.id, "select * from audit_view_2", true), /audit_view_2 is hidden/)
+    await assert.rejects(guarded.rows({ schema: "public", table: "audit_view", filters: [], sort: null, limit: 10, offset: 0 }), /hidden/)
+    assert.match(text(await call("run_query", { connection: "Shop", sql: "SELECT * FROM audit_view" })), /hidden/)
+    assert.match(text(await call("run_query", { connection: "Shop", sql: "SELECT query_to_xml('select * from audit_log', true, false, '')" })), /cannot be checked/)
+    // Shown again once nothing is hidden.
+    connections.setPermissions(shop.id, allow)
+    assert.equal((await runUserQuery(connections, shop.id, "select n from audit_view_2", true)).rows.length, 1)
+  } finally {
+    connections.setPermissions(shop.id, allow)
+    await driver.query("DROP VIEW audit_view_2; DROP VIEW audit_view", { readOnly: false, maxRows: 1 })
+  }
+})
+
+await check("permissions: structure only for the assistant, the user's access unchanged", async () => {
+  const marked = checkPermissions({
+    objects: [
+      { schema: "public", table: "salaries", access: "write", aiSchemaOnly: true },
+      { schema: "hr", table: null, access: "read", aiSchemaOnly: true },
+      { schema: "hr", table: "teams", access: "write" },
+      { schema: "public", table: "secret", access: "hidden", aiSchemaOnly: true },
+      { schema: "public", table: "orders", access: "read", aiSchemaOnly: "yes" },
+    ],
+  })
+  assert.equal(marked.objects.find((rule) => rule.table === "orders")!.aiSchemaOnly, undefined)
+  assert.equal(checkPermissions({ objects: [{ schema: "x", table: null, access: "schema" }] }).objects.length, 0)
+  const ai = forAssistant(marked)
+  assert.equal(objectAccess(ai, { schema: "public", table: "salaries" }), "schema")
+  assert.equal(objectAccess(ai, { schema: "hr", table: "people" }), "schema")
+  // The schema's mark holds over a table rule of its own.
+  assert.equal(objectAccess(ai, { schema: "hr", table: "teams" }), "schema")
+  assert.equal(objectAccess(ai, { schema: "public", table: "secret" }), "hidden")
+  assert.equal(objectAccess(ai, { schema: "public", table: "orders" }), "read")
+  assert.equal(objectAccess(marked, { schema: "public", table: "salaries" }), "write")
+  assert.equal(forAssistant(DEFAULT_PERMISSIONS), DEFAULT_PERMISSIONS)
+  const aiContext = { permissions: ai, access: "read_write" as const, ...pg }
+  assert.match(judge("select count(*) from salaries", aiContext).reasons.join(), /structure only/)
+  assert.match(hiddenIn("select * from hr.people", aiContext).join(), /structure only/)
+  assert.ok(hiddenIn("select query_to_xml('select * from salaries', true, false, '')", aiContext).length)
+  assert.deepEqual(hiddenIn("select * from orders", aiContext), [])
+  assert.match(describePermissions(marked, "read_write").join(), /structure only for the assistant.*public\.salaries/)
+  const viewed = hideDependentViews(ai, [
+    { view: { schema: "public", table: "v_pay" }, source: { schema: "public", table: "salaries" } },
+    { view: { schema: "public", table: "v_secret" }, source: { schema: "public", table: "secret" } },
+  ])
+  assert.equal(objectAccess(viewed, { schema: "public", table: "v_pay" }), "schema")
+  assert.equal(objectAccess(viewed, { schema: "public", table: "v_secret" }), "hidden")
+
+  // Against the server: the assistant lists and describes it, reads none of it; the user reads it.
+  await driver.query("CREATE VIEW audit_names AS SELECT * FROM audit_log", { readOnly: false, maxRows: 1 })
+  connections.setPermissions(shop.id, {
+    ...allow,
+    objects: [{ schema: "public", table: "audit_log", access: "write", aiSchemaOnly: true }],
+  })
+  try {
+    assert.match(text(await call("list_tables", { connection: "Shop" })), /audit_log/)
+    assert.match(text(await call("describe_table", { connection: "Shop", tables: ["audit_log"] })), /public\.audit_log \(table\)\n/)
+    for (const sql of ["SELECT * FROM audit_log", "SELECT count(*) FROM public.audit_log", "SELECT * FROM audit_names"]) {
+      assert.match(text(await call("run_query", { connection: "Shop", sql })), /structure only/, sql)
+    }
+    const assistant = connections.assistantDriver(shop.id)
+    await assert.rejects(assistant.rows({ schema: "public", table: "audit_log", filters: [], sort: null, limit: 10, offset: 0 }), /structure only/)
+    await assert.rejects(assistant.explain("select * from audit_log"), /structure only/)
+    assert.ok((await assistant.table({ schema: "public", table: "audit_log" })).columns.length > 0)
+    // The user is not touched.
+    await runUserQuery(connections, shop.id, "select * from audit_log", true)
+    await runUserQuery(connections, shop.id, "select * from audit_names", true)
+    await connections.driver(shop.id).rows({ schema: "public", table: "audit_log", filters: [], sort: null, limit: 10, offset: 0 })
+  } finally {
+    connections.setPermissions(shop.id, allow)
+    await driver.query("DROP VIEW audit_names", { readOnly: false, maxRows: 1 })
   }
 })
 

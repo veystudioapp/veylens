@@ -39,6 +39,7 @@ import {
   type Driver,
   type PlanLimits,
   type QueryOptions,
+  type ViewSource,
 } from "./types"
 
 /**
@@ -246,6 +247,30 @@ export class PostgresDriver implements Driver {
       })
     }
     return [...schemas.values()]
+  }
+
+  /** From the rewrite rules' dependencies: what each view and materialized
+   * view reads, whoever owns it. */
+  async viewSources(): Promise<ViewSource[]> {
+    const result = await this.run(
+      this.pool,
+      `SELECT DISTINCT vn.nspname, v.relname, tn.nspname, t.relname
+         FROM pg_depend d
+         JOIN pg_rewrite r ON r.oid = d.objid
+         JOIN pg_class v ON v.oid = r.ev_class
+         JOIN pg_namespace vn ON vn.oid = v.relnamespace
+         JOIN pg_class t ON t.oid = d.refobjid
+         JOIN pg_namespace tn ON tn.oid = t.relnamespace
+        WHERE d.classid = 'pg_rewrite'::regclass
+          AND d.refclassid = 'pg_class'::regclass
+          AND v.relkind IN ('v', 'm')
+          AND t.oid <> v.oid`
+    )
+    return result.rows.flatMap(([viewSchema, view, schema, table]) =>
+      viewSchema && view && schema && table
+        ? [{ view: { schema: viewSchema, table: view }, source: { schema, table } }]
+        : []
+    )
   }
 
   async table(ref: TableRef): Promise<TableInfo> {

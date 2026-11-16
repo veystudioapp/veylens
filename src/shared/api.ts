@@ -64,10 +64,23 @@ export type Rule = (typeof RULES)[number]
 /** A schema's or a table's: not seen at all, seen and not written, or as the
  * connection allows. The most specific rule wins: a table over its schema. */
 export const OBJECT_ACCESS = ["hidden", "read", "write"] as const
-export type ObjectAccess = (typeof OBJECT_ACCESS)[number]
+/**
+ * What a rule can say, plus `schema`: listed and described, its data
+ * refused — what an object whose data the assistant may not read is to the
+ * assistant. Never stored; made from `aiSchemaOnly` by `forAssistant`.
+ */
+export type ObjectAccess = (typeof OBJECT_ACCESS)[number] | "schema"
 
-/** `table` null is the whole schema. */
-export type ObjectRule = { schema: string; table: string | null; access: ObjectAccess }
+/**
+ * `table` null is the whole schema. `aiSchemaOnly`: the assistant sees its
+ * structure but none of its data — the user's own access is unchanged.
+ */
+export type ObjectRule = {
+  schema: string
+  table: string | null
+  access: ObjectAccess
+  aiSchemaOnly?: boolean
+}
 
 export type Guards = {
   /** An UPDATE or DELETE without WHERE is refused. */

@@ -37,7 +37,7 @@ import type {
   ViewerContext,
 } from "../shared/api"
 import { readPartialJson, TOOL_CATALOG } from "../shared/agent"
-import { defaultSchemaOf, describePermissions, judge } from "../shared/permissions"
+import { defaultSchemaOf, describePermissions, forAssistant, judge } from "../shared/permissions"
 import {
   APPROVAL_TOOLS,
   createDbTools,
@@ -834,7 +834,7 @@ export class Chats {
               ? input.statements.map(String)
               : [String(input.sql ?? "")]
           const context = {
-            permissions: target.permissions,
+            permissions: forAssistant(target.permissions),
             access: target.access,
             engine: target.engine,
             defaultSchema: defaultSchemaOf(target),

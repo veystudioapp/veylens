@@ -14,9 +14,9 @@ import {
   type Engine,
   type Permissions,
 } from "../shared/api"
-import { checkPermissions } from "../shared/permissions"
+import { checkPermissions, forAssistant } from "../shared/permissions"
 import { createDriver, type ConnectionConfig, type Driver } from "./db"
-import { GuardedDriver } from "./db/guarded"
+import { GuardedDriver, ViewSourceCache, type Policy } from "./db/guarded"
 
 /**
  * How a password is kept at rest. In the app this is Electron's `safeStorage`
@@ -87,7 +87,12 @@ function validate(input: ConnectionInput, cloudSql: CloudSql | null): void {
  */
 export class Connections {
   private stored: Stored[] = []
-  private readonly drivers = new Map<string, GuardedDriver>()
+  /** Per connection: one server driver, and the user's and the assistant's
+   * guards in front of it. */
+  private readonly drivers = new Map<
+    string,
+    { inner: Driver; user: GuardedDriver; assistant: GuardedDriver }
+  >()
 
   constructor(
     private readonly file: string,
@@ -145,9 +150,9 @@ export class Connections {
   }
 
   private drop(id: string): void {
-    const driver = this.drivers.get(id)
+    const open = this.drivers.get(id)
     this.drivers.delete(id)
-    void driver?.close()
+    void open?.inner.close()
   }
 
   list(): Connection[] {
@@ -254,12 +259,11 @@ export class Connections {
     }
   }
 
-  /** The connection's driver, behind its permissions. */
-  driver(id: string): GuardedDriver {
-    let driver = this.drivers.get(id)
-    if (!driver) {
+  private guards(id: string) {
+    let open = this.drivers.get(id)
+    if (!open) {
       const inner: Driver = this.create(this.config(this.find(id)))
-      driver = new GuardedDriver(inner, () => {
+      const policy = (): Policy => {
         const stored = this.find(id)
         return {
           name: stored.name,
@@ -268,15 +272,39 @@ export class Connections {
           access: stored.access ?? "read_write",
           permissions: checkPermissions(stored.permissions),
         }
-      })
-      this.drivers.set(id, driver)
+      }
+      const views = new ViewSourceCache(inner)
+      open = {
+        inner,
+        user: new GuardedDriver(inner, policy, views),
+        assistant: new GuardedDriver(
+          inner,
+          () => {
+            const current = policy()
+            return { ...current, permissions: forAssistant(current.permissions) }
+          },
+          views
+        ),
+      }
+      this.drivers.set(id, open)
     }
-    return driver
+    return open
+  }
+
+  /** The connection's driver, behind its permissions. */
+  driver(id: string): GuardedDriver {
+    return this.guards(id).user
+  }
+
+  /** The same driver as the assistant meets it: what is marked structure
+   * only for it is described, and its rows refused. */
+  assistantDriver(id: string): GuardedDriver {
+    return this.guards(id).assistant
   }
 
   async closeAll(): Promise<void> {
     const open = [...this.drivers.values()]
     this.drivers.clear()
-    await Promise.all(open.map((driver) => driver.close()))
+    await Promise.all(open.map(({ inner }) => inner.close()))
   }
 }

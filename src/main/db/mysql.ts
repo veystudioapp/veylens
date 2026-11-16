@@ -21,6 +21,7 @@ import type {
   TableRef,
   TreeSchema,
 } from "../../shared/api"
+import { referencesIn, tokenize } from "../../shared/permissions"
 import { startsLikeRead } from "../../shared/statements"
 import {
   assertReadOnly,
@@ -41,6 +42,7 @@ import {
   type Driver,
   type PlanLimits,
   type QueryOptions,
+  type ViewSource,
 } from "./types"
 
 const tick = (name: string) => `\`${name.replace(/`/g, "``")}\``
@@ -385,6 +387,44 @@ export class MysqlDriver implements Driver {
       entry.tables.push({ name, kind: type === "VIEW" ? "view" : "table" })
     }
     return [...schemas.values()]
+  }
+
+  /**
+   * What each view reads: VIEW_TABLE_USAGE where the server has it (MySQL
+   * 8.0.13+), else each view's definition read for its table names.
+   */
+  async viewSources(): Promise<ViewSource[]> {
+    const system = "('information_schema', 'mysql', 'performance_schema', 'sys')"
+    try {
+      const usage = await this.run(
+        this.pool,
+        `SELECT VIEW_SCHEMA, VIEW_NAME, TABLE_SCHEMA, TABLE_NAME
+           FROM information_schema.VIEW_TABLE_USAGE
+          WHERE VIEW_SCHEMA NOT IN ${system}`
+      )
+      return usage.rows.flatMap(([viewSchema, view, schema, table]) =>
+        viewSchema && view && schema && table
+          ? [{ view: { schema: viewSchema, table: view }, source: { schema, table } }]
+          : []
+      )
+    } catch {
+      const views = await this.run(
+        this.pool,
+        `SELECT TABLE_SCHEMA, TABLE_NAME, VIEW_DEFINITION
+           FROM information_schema.VIEWS
+          WHERE TABLE_SCHEMA NOT IN ${system}`
+      )
+      return views.rows.flatMap(([schema, name, definition]) => {
+        if (!schema || !name || !definition) return []
+        const view = { schema, table: name }
+        return tokenize(definition, "mysql").flatMap((tokens) =>
+          referencesIn(tokens, schema).map((ref) => ({
+            view,
+            source: { schema: ref.schema, table: ref.table },
+          }))
+        )
+      })
+    }
   }
 
   async table(ref: TableRef): Promise<TableInfo> {

@@ -109,6 +109,10 @@ export class CloudSqlDriver implements Driver {
   async runPlan(statements: string[], limits?: PlanLimits) {
     return (await this.ready()).runPlan(statements, limits)
   }
+  async viewSources() {
+    const inner = await this.ready()
+    return inner.viewSources ? inner.viewSources() : []
+  }
 
   async close(): Promise<void> {
     this.closed = true

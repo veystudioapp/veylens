@@ -27,6 +27,15 @@ import { splitErrorOffset } from "@shared/sql-errors"
 
 import { currentMentionTargets } from "./mentions"
 
+/** What a connection hides, as one string: the explorer's tree changes only
+ * when it does. */
+const hiddenKey = (permissions: Permissions | undefined) =>
+  (permissions?.objects ?? [])
+    .filter((rule) => rule.access === "hidden")
+    .map((rule) => `${rule.schema.toLowerCase()}.${rule.table?.toLowerCase() ?? "*"}`)
+    .sort()
+    .join("\n")
+
 export type TreeState =
   | { status: "loading" }
   | { status: "ready"; schemas: TreeSchema[] }
@@ -105,7 +114,9 @@ type State = {
   setPermissions(id: string, permissions: Permissions): Promise<void>
   saveConnection(id: string | null, input: ConnectionInput): Promise<void>
   deleteConnection(id: string): Promise<void>
-  loadTree(connectionId: string): Promise<void>
+  /** `quiet`: the tree on screen stays until the new one is in — for a
+   * refresh, not a first load. */
+  loadTree(connectionId: string, options?: { quiet?: boolean }): Promise<void>
   toggle(key: string): void
 
   openTable(connectionId: string, schema: string, table: string): void
@@ -342,11 +353,16 @@ export const useStore = create<State>((set, get) => {
     openSettings: (settings) => set({ settings }),
 
     async setPermissions(id, permissions) {
+      const before = get().connections.find((item) => item.id === id)?.permissions
       const saved = await api().setPermissions(id, permissions)
       set({
         connections: get().connections.map((item) => (item.id === id ? saved : item)),
       })
-      if (get().trees[id]) await get().loadTree(id)
+      // Only what is hidden changes the tree; the rest is applied as it is
+      // used. Refreshed behind the one on screen, not waited for.
+      if (get().trees[id] && hiddenKey(before) !== hiddenKey(saved.permissions)) {
+        void get().loadTree(id, { quiet: true })
+      }
     },
 
     async setAccess(id, access) {
@@ -410,8 +426,11 @@ export const useStore = create<State>((set, get) => {
       })
     },
 
-    async loadTree(connectionId) {
-      set({ trees: { ...get().trees, [connectionId]: { status: "loading" } } })
+    async loadTree(connectionId, options) {
+      const shown = get().trees[connectionId]?.status === "ready"
+      if (!(options?.quiet && shown)) {
+        set({ trees: { ...get().trees, [connectionId]: { status: "loading" } } })
+      }
       let next: TreeState
       try {
         const schemas = await api().getTree(connectionId)

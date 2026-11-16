@@ -44,6 +44,8 @@ export type QueryOptions = {
 
 export type PlanLimits = { maxAffected?: number; timeoutMs?: number }
 
+export type ViewSource = { view: TableRef; source: TableRef }
+
 export interface Driver {
   /** The server's version line — also the connection test. */
   ping(): Promise<string>
@@ -63,6 +65,9 @@ export interface Driver {
    * the engine allows — none. Rejects with which step failed.
    */
   runPlan(statements: string[], limits?: PlanLimits): Promise<PlanStepResult[]>
+  /** Each view and a table or view it reads, from the server's catalog: so
+   * a view over a hidden table is hidden too. */
+  viewSources?(): Promise<ViewSource[]>
   close(): Promise<void>
 }
 
