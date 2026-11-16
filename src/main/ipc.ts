@@ -342,7 +342,17 @@ export function registerIpc({
       }
       return state
     },
-    resetGatewayPassword: async () => gateway.resetPassword(),
+    resetGatewayPassword: async (gatewayId) => {
+      const state = gateway.resetPassword(gatewayId)
+      const changed = state.gateways.find((item) => item.id === gatewayId)
+      audit.record({
+        ...mine(null),
+        action: "gateway",
+        status: "ok",
+        summary: `Made a new password for the gateway "${changed?.name ?? gatewayId}"`,
+      })
+      return state
+    },
 
     appVersion: async () => updates.version,
     checkForUpdate: () => checkForUpdate(updates.version, process.platform),

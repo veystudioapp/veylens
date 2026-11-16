@@ -93,7 +93,7 @@ const api: DesktopApi = {
   deleteGateway: (gatewayId) => ipcRenderer.invoke(IPC.deleteGateway, gatewayId),
   switchGateway: (gatewayId, connectionId) =>
     ipcRenderer.invoke(IPC.switchGateway, gatewayId, connectionId),
-  resetGatewayPassword: () => ipcRenderer.invoke(IPC.resetGatewayPassword),
+  resetGatewayPassword: (gatewayId) => ipcRenderer.invoke(IPC.resetGatewayPassword, gatewayId),
   onGatewayState: (listener) => {
     const handler = (_event: IpcRendererEvent, payload: GatewayState) =>
       listener(payload)

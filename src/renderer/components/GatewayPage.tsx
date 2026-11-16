@@ -128,11 +128,12 @@ function GatewayCard({ gateway, status }: { gateway: GatewaySettings; status: Ga
   const save = useGateway((store) => store.save)
   const remove = useGateway((store) => store.remove)
   const switching = useGateway((store) => store.switching)
-  const password = useGateway((store) => store.state?.password ?? "")
+  const resetPassword = useGateway((store) => store.resetPassword)
   const all = useStore((store) => store.connections)
   const connections = useGatewayConnections(gateway)
   const pick = usePick(gateway)
   const [showEnv, setShowEnv] = useState(false)
+  const [reveal, setReveal] = useState(false)
 
   const Logo = ENGINE_LOGO[gateway.engine]
   const state = health(gateway, status)
@@ -141,6 +142,16 @@ function GatewayCard({ gateway, status }: { gateway: GatewaySettings; status: Ga
   )
   const live = connections.find((connection) => connection.id === gateway.active)
   const push = (patch: Partial<GatewaySettings>) => void save({ ...gateway, ...patch })
+  const snippet = envSnippet(gateway.engine, gateway.port, gateway.password, live?.database ?? "")
+
+  const rotate = async () => {
+    const ok = await confirm({
+      title: `Make a new password for "${gateway.name}"?`,
+      description: `${status?.sessions ? "The app connections open through it are closed now, and apps" : "Apps"} with the old password in their .env are refused when they connect. Other gateways are not touched.`,
+      action: "New password",
+    })
+    if (ok) void resetPassword(gateway.id)
+  }
 
   const destroy = async () => {
     const ok = await confirm({
@@ -230,27 +241,38 @@ function GatewayCard({ gateway, status }: { gateway: GatewaySettings; status: Ga
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-          <span className="flex-1" />
-          <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => setShowEnv(!showEnv)}>
-            .env
-            <ChevronDown className={cn("transition-transform", showEnv && "rotate-180")} />
-          </Button>
         </div>
-        {showEnv && (
-          <div className="mx-1 mt-1 mb-0.5 rounded-md border bg-muted/60">
-            <div className="flex items-center border-b py-0.5 pr-1 pl-2.5">
-              <span className="flex-1 text-[11px] text-muted-foreground">Paste once into the app's .env</span>
-              <CopyButton
-                text={envSnippet(gateway.engine, gateway.port, password, live?.database ?? "")}
-                label="Copy"
-              />
-            </div>
-            <pre className="overflow-x-auto px-2.5 py-2 font-mono text-[11px] leading-relaxed select-text">
-              {envSnippet(gateway.engine, gateway.port, password, live?.database ?? "")}
-            </pre>
-          </div>
-        )}
       </div>
+
+      {/* What the app signs in with, and the lines for its .env */}
+      <div className="flex items-center gap-1.5 border-t px-3 py-1.5">
+        <span className="shrink-0 text-[11px] text-muted-foreground">Password</span>
+        <code className="min-w-0 flex-1 truncate px-1 font-mono text-[11px]">
+          {reveal ? gateway.password : "•".repeat(Math.min(20, gateway.password.length))}
+        </code>
+        <IconButton label={reveal ? "Hide password" : "Show password"} onClick={() => setReveal(!reveal)}>
+          {reveal ? <EyeOff /> : <Eye />}
+        </IconButton>
+        <CopyButton text={gateway.password} label="Copy password" />
+        <IconButton label="New password" onClick={() => void rotate()}>
+          <RotateCcw />
+        </IconButton>
+        <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => setShowEnv(!showEnv)}>
+          .env
+          <ChevronDown className={cn("transition-transform", showEnv && "rotate-180")} />
+        </Button>
+      </div>
+      {showEnv && (
+        <div className="mx-3 mb-3 rounded-md border bg-muted/60">
+          <div className="flex items-center border-b py-0.5 pr-1 pl-2.5">
+            <span className="flex-1 text-[11px] text-muted-foreground">Paste once into the app's .env</span>
+            <CopyButton text={snippet} label="Copy" />
+          </div>
+          <pre className="overflow-x-auto px-2.5 py-2 font-mono text-[11px] leading-relaxed select-text">
+            {snippet}
+          </pre>
+        </div>
+      )}
     </div>
   )
 }
@@ -333,8 +355,6 @@ export function GatewayPage() {
   const error = useGateway((store) => store.error)
   const save = useGateway((store) => store.save)
   const clearError = useGateway((store) => store.clearError)
-  const resetPassword = useGateway((store) => store.resetPassword)
-  const [reveal, setReveal] = useState(false)
 
   if (!state) {
     return (
@@ -351,7 +371,8 @@ export function GatewayPage() {
     const names = new Set(state.gateways.map((gateway) => gateway.name))
     let name = `${ENGINE_LABEL[engine]} gateway`
     for (let n = 2; names.has(name); n++) name = `${ENGINE_LABEL[engine]} gateway ${n}`
-    void save({ id: "", name, engine, port, enabled: true, connections: [], active: null })
+    // An empty password: the gateway makes its own.
+    void save({ id: "", name, engine, port, enabled: true, connections: [], active: null, password: "" })
   }
 
   const newButton = (
@@ -429,32 +450,8 @@ export function GatewayPage() {
           </div>
         )}
 
-        <div className="mt-6 flex items-center gap-2 rounded-xl border px-4 py-2.5">
-          <span className="shrink-0 text-xs text-muted-foreground">Password</span>
-          <code className="min-w-0 flex-1 truncate rounded-md bg-muted/60 px-2 py-1 font-mono text-xs">
-            {reveal ? state.password : "•".repeat(Math.min(24, state.password.length))}
-          </code>
-          <IconButton label={reveal ? "Hide" : "Show"} onClick={() => setReveal(!reveal)}>
-            {reveal ? <EyeOff /> : <Eye />}
-          </IconButton>
-          <CopyButton text={state.password} label="Copy password" />
-          <IconButton
-            label="New password"
-            onClick={async () => {
-              const ok = await confirm({
-                title: "Make a new gateway password?",
-                description:
-                  "Every app connection open through a gateway is closed now, and apps with the old password in their .env are refused when they reconnect.",
-                action: "New password",
-              })
-              if (ok) void resetPassword()
-            }}
-          >
-            <RotateCcw />
-          </IconButton>
-        </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          One password for every gateway; any user name works. The app lands
+        <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
+          Each gateway has its own password; any user name works. The app lands
           in the picked connection's own database. Use <code>127.0.0.1</code>{" "}
           and SSL off in the app. Vey Lens's permissions do not apply through
           a gateway: the app signs in as the connection's database user.

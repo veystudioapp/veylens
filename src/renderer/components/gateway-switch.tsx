@@ -1,16 +1,7 @@
-import { ChevronDown, CircleAlert } from "lucide-react"
+import { CircleAlert } from "lucide-react"
 
 import type { Connection, GatewaySettings, GatewayState } from "@shared/api"
 
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
 import { MySQL } from "@/components/ui/svgs/mysql"
 import { PostgreSQL } from "@/components/ui/svgs/postgresql"
@@ -18,9 +9,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useGateway } from "@/lib/gateway"
 import { useStore } from "@/lib/store"
 import { connectionTone, toneColor } from "@/lib/tones"
-import { cn } from "@/lib/utils"
 
 import { confirm } from "./confirm"
+import { SimpleSelect } from "./simple-select"
 
 export const ENGINE_LOGO = { postgres: PostgreSQL, mysql: MySQL } as const
 
@@ -53,13 +44,8 @@ export function usePick(gateway: GatewaySettings) {
   }
 }
 
-/** Whether the connections' names fit side by side in the explorer — a click
- * each — or go in a menu. */
-const fits = (connections: Connection[]) =>
-  connections.length <= 4 && connections.map((item) => item.name).join("").length <= 32
-
-/** One gateway's line in the explorer: its name and its connections, the
- * live one raised. */
+/** One gateway's lines in the explorer: its name, and a select of its
+ * connections — picking one sends the app there. */
 function GatewayLine({
   gateway,
   state,
@@ -75,105 +61,59 @@ function GatewayLine({
   const status = state.status.find((item) => item.gatewayId === gateway.id)
   const live = connections.find((connection) => connection.id === gateway.active)
   const Logo = ENGINE_LOGO[gateway.engine]
-  const busy = (id?: string) =>
-    switching?.gatewayId === gateway.id && (!id || switching.connectionId === id)
+  const busy = switching?.gatewayId === gateway.id
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1.5">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                onClick={onOpen}
-                className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                {status?.error ? (
-                  <CircleAlert className="size-3.5 shrink-0 text-destructive" />
-                ) : (
-                  <Logo className="size-3.5 shrink-0" />
-                )}
-                <span className="truncate">{gateway.name}</span>
-                {!!status?.sessions && (
-                  <span className="rounded bg-muted px-1 text-[10px] tabular-nums">{status.sessions}</span>
-                )}
-              </button>
-            }
-          />
-          <TooltipContent side="top" className="max-w-80 whitespace-pre-line">
-            {[
-              `${gateway.name} · 127.0.0.1:${gateway.port} → ${live?.name ?? "nothing"}`,
-              ...(status?.error ? [status.error] : []),
-            ].join("\n")}
-          </TooltipContent>
-        </Tooltip>
-        {!fits(connections) && (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label={`${gateway.name}: connection`}
-                  className="flex h-6 max-w-36 shrink-0 items-center gap-1 rounded-md bg-muted px-2 text-[11px] font-medium hover:bg-muted/70"
-                >
-                  {busy() && <Spinner className="size-3 shrink-0" />}
-                  <span className="truncate">{live?.name ?? "None"}</span>
-                  <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
-                </button>
-              }
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={onOpen}
+              className="flex h-6 min-w-0 items-center gap-1.5 rounded-md px-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              {status?.error ? (
+                <CircleAlert className="size-3.5 shrink-0 text-destructive" />
+              ) : (
+                <Logo className="size-3.5 shrink-0" />
+              )}
+              <span className="truncate">{gateway.name}</span>
+              {!!status?.sessions && (
+                <span className="shrink-0 rounded bg-muted px-1 text-[10px] tabular-nums">{status.sessions}</span>
+              )}
+              {busy && <Spinner className="size-3 shrink-0" />}
+            </button>
+          }
+        />
+        <TooltipContent side="top" className="max-w-80 whitespace-pre-line">
+          {[
+            `127.0.0.1:${gateway.port} → ${live?.name ?? "nothing"}`,
+            ...(status?.error ? [status.error] : []),
+          ].join("\n")}
+        </TooltipContent>
+      </Tooltip>
+      <SimpleSelect
+        label={`${gateway.name}: connection`}
+        value={live?.id ?? ""}
+        items={Object.fromEntries(connections.map((connection) => [connection.id, connection.name]))}
+        size="sm"
+        heading="Send the app to"
+        align="start"
+        className="w-full justify-between"
+        leading={
+          live && (
+            <span
+              className="size-2 shrink-0 rounded-full"
+              style={{ background: toneColor(connectionTone(live)) }}
             />
-            <DropdownMenuContent side="top" align="end" className="w-auto min-w-48">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>{gateway.name}</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={gateway.active ?? ""}
-                  onValueChange={(value) => {
-                    const next = connections.find((connection) => connection.id === value)
-                    if (next) void pick(next)
-                  }}
-                >
-                  {connections.map((connection) => (
-                    <DropdownMenuRadioItem key={connection.id} value={connection.id}>
-                      <span
-                        className="size-2 shrink-0 rounded-full"
-                        style={{ background: toneColor(connectionTone(connection)) }}
-                      />
-                      <span className="text-xs">{connection.name}</span>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </div>
-      {fits(connections) && connections.length > 1 && (
-        <div role="radiogroup" aria-label={`${gateway.name}: connection`} className="flex min-w-0 rounded-md bg-muted p-0.5">
-          {connections.map((connection) => {
-            const on = connection.id === gateway.active
-            return (
-              <button
-                key={connection.id}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                title={connection.name}
-                onClick={() => void pick(connection)}
-                className={cn(
-                  "flex h-5 min-w-0 flex-1 items-center justify-center gap-1 rounded-[4px] px-1 text-[11px] whitespace-nowrap transition-colors",
-                  on
-                    ? "bg-background font-medium text-foreground shadow-xs"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {busy(connection.id) && <Spinner className="size-3 shrink-0" />}
-                <span className="truncate">{connection.name}</span>
-              </button>
-            )
-          })}
-        </div>
-      )}
+          )
+        }
+        onChange={(id) => {
+          const next = connections.find((connection) => connection.id === id)
+          if (next) void pick(next)
+        }}
+      />
     </div>
   )
 }

@@ -395,6 +395,7 @@ await check("settings: a gateway is one engine, one port, and connections of tha
     enabled: true,
     connections: ["pgLocal", "pgDev", "pgLocal"],
     active: "gone",
+    password: "",
   }
   const settings = checkGatewaySettings(base, engineOf)
   assert.ok(settings.id)
@@ -402,6 +403,9 @@ await check("settings: a gateway is one engine, one port, and connections of tha
   assert.deepEqual(settings.connections, ["pgLocal", "pgDev"])
   // An active connection it does not hold falls back to its first.
   assert.equal(settings.active, "pgLocal")
+  // No password given: one is made; one given is kept.
+  assert.ok(settings.password.length >= 20)
+  assert.equal(checkGatewaySettings({ ...base, password: "mine" }, engineOf).password, "mine")
   assert.equal(checkGatewaySettings({ ...base, active: "pgDev" }, engineOf).active, "pgDev")
   assert.equal(checkGatewaySettings({ ...base, connections: [], active: null }, engineOf).active, null)
 
@@ -428,11 +432,14 @@ function harness() {
     dialled.push(target.host)
     return sample.stream()
   })
-  /** A pool whose every connection comes in on the gateway. */
+  const passwordOf = (gatewayId: string) =>
+    gateway.state().gateways.find((item) => item.id === gatewayId)!.password
+  /** A pool whose every connection comes in on the gateway, with its
+   * password as it is now — as it would be in the app's .env. */
   const app = (gatewayId: string) => {
     const pool = new pg.Pool({
       user: "app",
-      password: gateway.state().password,
+      password: passwordOf(gatewayId),
       max: 1,
       stream: () => {
         const [appSide, gatewaySide] = pair()
@@ -454,11 +461,12 @@ function harness() {
       enabled: false,
       connections: [],
       active: null,
+      password: "",
       ...settings,
     })
     return state.gateways.at(-1)!
   }
-  return { dir, connections, save, dialled, gateway, app, sessions, create }
+  return { dir, connections, save, dialled, gateway, app, sessions, create, passwordOf }
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
@@ -499,7 +507,7 @@ await check("gateway: picking another connection closes the old sessions and the
     const again = new Gateway(path.join(dir, "gateway.json"), connections, () => {})
     assert.equal(again.state().gateways.length, 1)
     assert.equal(again.state().gateways[0]!.active, dev.id)
-    assert.equal(again.state().password, gateway.state().password)
+    assert.equal(again.state().gateways[0]!.password, gateway.state().gateways[0]!.password)
     again.close()
     gateway.close()
     void pool.end()
@@ -555,43 +563,94 @@ await check("gateway: an empty gateway says so; two gateways switch apart and ne
   }
 })
 
-await check("gateway: a new password closes every open connection and refuses the old one", async () => {
-  const { dir, save, gateway, app, sessions, create } = harness()
+await check("gateway: each has its own password; a new one closes only its connections", async () => {
+  const { dir, save, gateway, app, sessions, create, passwordOf } = harness()
   try {
-    const local = save("PG local", "local-host")
-    const shop = create({ name: "Shop", connections: [local.id] })
-    // The app's pool, with the password as it was in its .env.
-    const stale = app(shop.id)
-    await stale.query("select 1")
-    assert.equal(sessions(shop.id), 1)
+    const shopDb = save("Shop local", "shop-host")
+    const billingDb = save("Billing local", "billing-host")
+    const shop = create({ name: "Shop", port: 15432, connections: [shopDb.id] })
+    const billing = create({ name: "Billing", port: 15433, connections: [billingDb.id] })
+    assert.notEqual(shop.password, billing.password)
 
-    const before = gateway.state().password
-    gateway.resetPassword()
+    // One gateway's password does not open another.
+    const wrongDoor = new pg.Pool({
+      user: "app",
+      password: billing.password,
+      max: 1,
+      stream: () => {
+        const [appSide, gatewaySide] = pair()
+        gateway.accept(shop.id, gatewaySide as never)
+        return appSide as never
+      },
+    })
+    wrongDoor.on("error", () => {})
+    await assert.rejects(wrongDoor.query("select 1"), /password authentication failed/)
+
+    const shopApp = app(shop.id)
+    const billingApp = app(billing.id)
+    await shopApp.query("select 1")
+    await billingApp.query("select 1")
+
+    gateway.resetPassword(shop.id)
     await settle()
-    assert.notEqual(gateway.state().password, before)
+    assert.notEqual(passwordOf(shop.id), shop.password)
+    assert.equal(passwordOf(billing.id), billing.password)
     assert.equal(sessions(shop.id), 0)
-    // Its next connection signs in with the old password, and is refused.
-    await assert.rejects(stale.query("select 1"), (error: Error & { code?: string }) => {
+    assert.equal(sessions(billing.id), 1)
+    // Shop's app still has the old password: refused. Billing carries on.
+    await assert.rejects(shopApp.query("select 1"), (error: Error & { code?: string }) => {
       assert.equal(error.code, "28P01")
       return true
     })
-    // With the new one in its .env, it is let in.
+    await billingApp.query("select 1")
+    // With the new one in its .env, Shop's app is let in.
     const fresh = app(shop.id)
     await fresh.query("select 1")
     gateway.close()
-    void stale.end()
-    void fresh.end()
+    for (const pool of [wrongDoor, shopApp, billingApp, fresh]) void pool.end()
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-await check("gateway: settings from before are dropped, the password kept", () => {
+await check("gateway: the shared password of version 2 becomes each gateway's own", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "veylens-gateway-"))
+  try {
+    const connections = new Connections(path.join(dir, "connections.json"), {
+      encrypt: () => null,
+      decrypt: () => null,
+    })
+    const local = connections.save(null, {
+      engine: "mysql", name: "My local", host: "h", port: 3306, user: "u", password: "p", database: "d", ssl: "off",
+    })
+    writeFileSync(
+      path.join(dir, "gateway.json"),
+      JSON.stringify({
+        version: 2,
+        password: "shared-before",
+        gateways: [
+          { id: "a", name: "A", engine: "mysql", port: 13306, enabled: false, connections: [local.id], active: local.id },
+          { id: "b", name: "B", engine: "postgres", port: 15432, enabled: false, connections: [], active: null },
+        ],
+      })
+    )
+    const gateway = new Gateway(path.join(dir, "gateway.json"), connections, () => {})
+    assert.deepEqual(gateway.state().gateways.map((item) => item.password), ["shared-before", "shared-before"])
+    gateway.close()
+    const written = JSON.parse(readFileSync(path.join(dir, "gateway.json"), "utf8"))
+    assert.equal(written.version, 3)
+    assert.equal(written.password, undefined)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check("gateway: settings from before version 2 are dropped", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "veylens-gateway-"))
   try {
     writeFileSync(
       path.join(dir, "gateway.json"),
-      JSON.stringify({ password: "kept", settings: { enabled: true, environments: ["local"], active: "local", routes: [] } })
+      JSON.stringify({ password: "old", settings: { enabled: true, environments: ["local"], active: "local", routes: [] } })
     )
     const connections = new Connections(path.join(dir, "connections.json"), {
       encrypt: () => null,
@@ -599,9 +658,7 @@ await check("gateway: settings from before are dropped, the password kept", () =
     })
     const gateway = new Gateway(path.join(dir, "gateway.json"), connections, () => {})
     assert.deepEqual(gateway.state().gateways, [])
-    assert.equal(gateway.state().password, "kept")
     gateway.close()
-    assert.equal(JSON.parse(readFileSync(path.join(dir, "gateway.json"), "utf8")).version, 2)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

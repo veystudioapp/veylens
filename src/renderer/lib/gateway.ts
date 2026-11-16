@@ -20,7 +20,7 @@ type GatewayStore = {
   save: (settings: GatewaySettings) => Promise<GatewayState | null>
   remove: (gatewayId: string) => Promise<void>
   switchTo: (gatewayId: string, connectionId: string) => Promise<void>
-  resetPassword: () => Promise<void>
+  resetPassword: (gatewayId: string) => Promise<void>
   clearError: () => void
 }
 
@@ -63,9 +63,9 @@ export const useGateway = create<GatewayStore>((set) => ({
     set({ error: null })
   },
 
-  async resetPassword() {
+  async resetPassword(gatewayId) {
     try {
-      set({ state: await window.veylens.resetGatewayPassword(), error: null })
+      set({ state: await window.veylens.resetGatewayPassword(gatewayId), error: null })
     } catch (error) {
       set({ error: errorMessage(error) })
     }

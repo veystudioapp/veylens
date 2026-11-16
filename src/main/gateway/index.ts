@@ -72,6 +72,7 @@ export function checkGatewaySettings(
   }
   return {
     id: input.id || randomUUID(),
+    password: typeof input.password === "string" && input.password ? input.password : newPassword(),
     name,
     engine: input.engine,
     port,
@@ -103,7 +104,6 @@ function checkPorts(gateways: GatewaySettings[]): void {
  */
 export class Gateway {
   private gateways: GatewaySettings[] = []
-  private password = newPassword()
   /** Per gateway. */
   private readonly listeners = new Map<string, Listener>()
   private readonly sessions = new Set<Session>()
@@ -126,19 +126,24 @@ export class Gateway {
       const parsed = JSON.parse(readFileSync(file, "utf8")) as {
         version?: number
         gateways?: GatewaySettings[]
+        /** Version 2: one password for every gateway. */
         password?: string
       }
-      if (typeof parsed.password === "string" && parsed.password) this.password = parsed.password
-      // Settings from before gateways were this simple are not carried over;
-      // the password is.
-      if (parsed.version === 2) {
-        current = true
+      // Settings from before gateways were this simple are not carried over.
+      // Version 2 had one password for all: each gateway keeps it, so the
+      // apps' .env files still work.
+      current = parsed.version === 3
+      if (parsed.version === 2 || parsed.version === 3) {
+        const shared = typeof parsed.password === "string" ? parsed.password : ""
         const engineOf = (id: string) => this.engineOf(id)
         for (const stored of parsed.gateways ?? []) {
           try {
             // A connection removed since is dropped, not fatal.
             const kept = (stored.connections ?? []).filter((id) => engineOf(id) === stored.engine)
-            const gateway = checkGatewaySettings({ ...stored, connections: kept }, engineOf)
+            const gateway = checkGatewaySettings(
+              { ...stored, connections: kept, password: stored.password || shared },
+              engineOf
+            )
             checkPorts([...this.gateways, gateway])
             this.gateways.push(gateway)
           } catch {
@@ -166,7 +171,7 @@ export class Gateway {
     mkdirSync(path.dirname(this.file), { recursive: true })
     writeFileSync(
       this.file,
-      JSON.stringify({ version: 2, gateways: this.gateways, password: this.password }, null, 2),
+      JSON.stringify({ version: 3, gateways: this.gateways }, null, 2),
       { mode: 0o600 }
     )
     chmodSync(this.file, 0o600)
@@ -181,7 +186,6 @@ export class Gateway {
   state(): GatewayState {
     return {
       gateways: this.gateways,
-      password: this.password,
       status: this.gateways.map((gateway) => {
         const listener = this.listeners.get(gateway.id)
         let sessions = 0
@@ -243,13 +247,16 @@ export class Gateway {
     return this.state()
   }
 
-  /** A new password. Every app connection open is closed: what signed in
-   * with the old one keeps no access, and the app's pool must sign in again
-   * with the new. */
-  resetPassword(): GatewayState {
-    this.password = newPassword()
+  /** A new password for one gateway. Its app connections are closed: what
+   * signed in with the old one keeps no access, and the app's pool must sign
+   * in again with the new. Other gateways are not touched. */
+  resetPassword(gatewayId: string): GatewayState {
+    this.gateway(gatewayId)
+    this.gateways = this.gateways.map((item) =>
+      item.id === gatewayId ? { ...item, password: newPassword() } : item
+    )
     this.persist()
-    for (const session of this.sessions) this.end(session)
+    for (const session of this.sessions) if (session.gatewayId === gatewayId) this.end(session)
     this.changed()
     return this.state()
   }
@@ -353,7 +360,8 @@ export class Gateway {
     })
     this.changed()
     const gate: Gate = {
-      password: () => this.password,
+      // Read when the app signs in: a password changed meanwhile is the one.
+      password: () => this.gateways.find((item) => item.id === gatewayId)?.password ?? "",
       target: () => {
         const target = this.target(gatewayId)
         session.connectionId = target.connectionId

@@ -170,6 +170,9 @@ export type GatewaySettings = {
   connections: string[]
   /** The one it goes to now; null while it holds none. */
   active: string | null
+  /** What apps sign in to this gateway with, whatever user they name. It
+   * goes in their `.env`, so it is shown. Empty asks for a new one. */
+  password: string
 }
 
 export type GatewayStatus = {
@@ -183,9 +186,6 @@ export type GatewayStatus = {
 
 export type GatewayState = {
   gateways: GatewaySettings[]
-  /** What apps sign in to every gateway with, whatever user they name. It
-   * goes in their `.env`, so it is shown. */
-  password: string
   status: GatewayStatus[]
 }
 
@@ -1229,8 +1229,9 @@ export type DesktopApi = {
   /** Points the gateway at one of its connections, closing the sessions
    * open to the old one so the app's pool reconnects. */
   switchGateway(gatewayId: string, connectionId: string): Promise<GatewayState>
-  /** A new password: apps already signed in stay. */
-  resetGatewayPassword(): Promise<GatewayState>
+  /** A new password for the gateway; the app connections open through it
+   * are closed, so only the new one gets back in. */
+  resetGatewayPassword(gatewayId: string): Promise<GatewayState>
   /** Ports opening or failing, sessions coming and going, a switch. */
   onGatewayState(listener: (state: GatewayState) => void): () => void
 
