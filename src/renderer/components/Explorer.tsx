@@ -2,6 +2,7 @@ import {
   BookOpen,
   ChevronDown,
   ChevronRight,
+  Copy,
   Database,
   Ellipsis,
   Eye,
@@ -20,9 +21,16 @@ import {
 import { useEffect, useState, type ReactNode } from "react"
 
 import { addressOf } from "@shared/address"
-import type { Connection, Tone } from "@shared/api"
+import type { Connection, Dashboard, Tone } from "@shared/api"
 
 import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,6 +42,7 @@ import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { ACCESS_ICON, ACCESS_LABEL } from "@/lib/access"
 import { useStore } from "@/lib/store"
+import { quoteName } from "@/lib/sql-complete"
 import { connectionTone, KIND_TONE, toneStyle } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 
@@ -43,6 +52,18 @@ import { promptText } from "./prompt"
 
 const ENGINE_LABEL = { postgres: "PostgreSQL", mysql: "MySQL" } as const
 
+/** One choice in a row's right-click menu, or a line between groups of them. */
+type MenuEntry =
+  | {
+      label: string
+      icon: ReactNode
+      onSelect: () => void
+      destructive?: boolean
+    }
+  | "separator"
+
+const copy = (text: string) => void navigator.clipboard.writeText(text)
+
 /** One line of the tree. `depth` is how far it is indented. */
 function Row({
   depth,
@@ -51,6 +72,7 @@ function Row({
   label,
   trailing,
   actions,
+  menu,
   active,
   title,
   tone,
@@ -65,11 +87,13 @@ function Row({
   label: string
   trailing?: ReactNode
   actions?: ReactNode
+  /** What a right-click on the row offers. */
+  menu?: MenuEntry[]
   active?: boolean
   title?: string
   onClick: () => void
 }) {
-  return (
+  const row = (
     <div
       role="treeitem"
       aria-expanded={open}
@@ -85,7 +109,7 @@ function Row({
       }}
       style={{ paddingLeft: 8 + depth * 14 }}
       className={cn(
-        "group flex h-[26px] items-center gap-1.5 rounded-md pr-1.5 text-[13px] outline-offset-[-2px] hover:bg-sidebar-accent/70",
+        "group flex h-[26px] items-center gap-1.5 rounded-md pr-1.5 text-[13px] outline-offset-[-2px] hover:bg-sidebar-accent/70 data-popup-open:bg-sidebar-accent/70",
         active && "bg-primary/10 font-medium text-foreground hover:bg-primary/15"
       )}
     >
@@ -125,6 +149,29 @@ function Row({
       )}
     </div>
   )
+
+  if (!menu?.length) return row
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={row} />
+      <ContextMenuContent className="w-52">
+        {menu.map((entry, index) =>
+          entry === "separator" ? (
+            <ContextMenuSeparator key={index} />
+          ) : (
+            <ContextMenuItem
+              key={entry.label}
+              variant={entry.destructive ? "destructive" : "default"}
+              onClick={entry.onSelect}
+            >
+              {entry.icon}
+              {entry.label}
+            </ContextMenuItem>
+          )
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+  )
 }
 
 function ConnectionNode({
@@ -145,6 +192,7 @@ function ConnectionNode({
   const openKnowledge = useStore((state) => state.openKnowledge)
   const openDashboard = useStore((state) => state.openDashboard)
   const saveDashboard = useStore((state) => state.saveDashboard)
+  const deleteDashboard = useStore((state) => state.deleteDashboard)
   const loadKnowledge = useStore((state) => state.loadKnowledge)
   const knowledge = useStore((state) => state.knowledge[connection.id])
   const allDashboards = useStore((state) => state.dashboards)
@@ -198,6 +246,50 @@ function ConnectionNode({
     if (ok) void deleteConnection(connection.id)
   }
 
+  const renameDashboard = async (dashboard: Dashboard) => {
+    const title = await promptText({
+      title: "Rename dashboard",
+      label: "Dashboard name",
+      initial: dashboard.title,
+      action: "Rename",
+    })
+    if (title) void saveDashboard({ ...dashboard, title }).catch(() => {})
+  }
+
+  const removeDashboard = async (dashboard: Dashboard) => {
+    const ok = await confirm({
+      title: `Delete "${dashboard.title}"?`,
+      description:
+        "The dashboard, its filters and its tiles are removed. The data they show is not touched.",
+      action: "Delete",
+      destructive: true,
+    })
+    if (ok) void deleteDashboard(dashboard.id)
+  }
+
+  const quote = (name: string) => quoteName(name, connection.engine)
+
+  /** Shared by the row's "…" button and its right-click menu. */
+  const connectionEntries: MenuEntry[] = [
+    {
+      label: "Refresh tables",
+      icon: <RefreshCw />,
+      onSelect: () => void loadTree(connection.id),
+    },
+    {
+      label: "Edit connection",
+      icon: <Pencil />,
+      onSelect: () => openDialog({ mode: "edit", connection }),
+    },
+    "separator",
+    {
+      label: "Remove",
+      icon: <Trash2 />,
+      destructive: true,
+      onSelect: () => void remove(),
+    },
+  ]
+
   return (
     <div role="group">
       <Row
@@ -242,28 +334,43 @@ function ConnectionNode({
                 }
               />
               <DropdownMenuContent align="end" className="w-44">
-                <DropdownMenuItem onClick={() => void loadTree(connection.id)}>
-                  <RefreshCw />
-                  Refresh tables
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => openDialog({ mode: "edit", connection })}
-                >
-                  <Pencil />
-                  Edit connection
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  onClick={() => void remove()}
-                >
-                  <Trash2 />
-                  Remove
-                </DropdownMenuItem>
+                {connectionEntries.map((entry, index) =>
+                  entry === "separator" ? (
+                    <DropdownMenuSeparator key={index} />
+                  ) : (
+                    <DropdownMenuItem
+                      key={entry.label}
+                      variant={entry.destructive ? "destructive" : "default"}
+                      onClick={entry.onSelect}
+                    >
+                      {entry.icon}
+                      {entry.label}
+                    </DropdownMenuItem>
+                  )
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </>
         }
+        menu={[
+          {
+            label: "New SQL query",
+            icon: <SquareTerminal />,
+            onSelect: () => openQuery(connection.id),
+          },
+          {
+            label: "New dashboard",
+            icon: <LayoutDashboard />,
+            onSelect: () => void newDashboard(),
+          },
+          {
+            label: "Business context",
+            icon: <BookOpen />,
+            onSelect: () => openKnowledge(connection.id),
+          },
+          "separator",
+          ...connectionEntries,
+        ]}
       />
 
       {open && tree?.status === "error" && (
@@ -315,6 +422,13 @@ function ConnectionNode({
                 <Plus />
               </IconButton>
             }
+            menu={[
+              {
+                label: "New dashboard",
+                icon: <Plus />,
+                onSelect: () => void newDashboard(),
+              },
+            ]}
           />
           {dashboardsOpen &&
             (dashboards.length === 0 ? (
@@ -335,6 +449,20 @@ function ConnectionNode({
                     activeTab.dashboardId === dashboard.id
                   }
                   onClick={() => openDashboard(connection.id, dashboard.id)}
+                  menu={[
+                    {
+                      label: "Rename…",
+                      icon: <Pencil />,
+                      onSelect: () => void renameDashboard(dashboard),
+                    },
+                    "separator",
+                    {
+                      label: "Delete dashboard",
+                      icon: <Trash2 />,
+                      destructive: true,
+                      onSelect: () => void removeDashboard(dashboard),
+                    },
+                  ]}
                 />
               ))
             ))}
@@ -368,6 +496,24 @@ function ConnectionNode({
                   label={schema.name}
                   trailing={tables.length}
                   onClick={() => toggle(schemaKey)}
+                  menu={[
+                    {
+                      label: "New SQL query",
+                      icon: <SquareTerminal />,
+                      onSelect: () => openQuery(connection.id),
+                    },
+                    {
+                      label: "Refresh tables",
+                      icon: <RefreshCw />,
+                      onSelect: () => void loadTree(connection.id),
+                    },
+                    "separator",
+                    {
+                      label: "Copy name",
+                      icon: <Copy />,
+                      onSelect: () => copy(schema.name),
+                    },
+                  ]}
                 />
                 {schemaOpen &&
                   tables.map((table) => (
@@ -387,6 +533,29 @@ function ConnectionNode({
                       onClick={() =>
                         openTable(connection.id, schema.name, table.name)
                       }
+                      menu={[
+                        {
+                          label: "Query in SQL editor",
+                          icon: <SquareTerminal />,
+                          onSelect: () =>
+                            openQuery(connection.id, {
+                              title: table.name,
+                              sql: `SELECT *\nFROM ${quote(schema.name)}.${quote(table.name)}\nLIMIT 100;`,
+                            }),
+                        },
+                        "separator",
+                        {
+                          label: "Copy name",
+                          icon: <Copy />,
+                          onSelect: () => copy(table.name),
+                        },
+                        {
+                          label: "Copy qualified name",
+                          icon: <Copy />,
+                          onSelect: () =>
+                            copy(`${quote(schema.name)}.${quote(table.name)}`),
+                        },
+                      ]}
                     />
                   ))}
               </div>
