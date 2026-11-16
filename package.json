@@ -37,6 +37,7 @@
     "@lezer/highlight": "^1.2.5",
     "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4",
+    "@tanstack/react-virtual": "^3.14.26",
     "@types/node": "^22",
     "@types/pg": "^8",
     "@types/pg-cursor": "^2",

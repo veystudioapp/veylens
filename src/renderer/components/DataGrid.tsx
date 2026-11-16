@@ -43,6 +43,7 @@ import {
   Type,
   X,
 } from "lucide-react"
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual"
 import {
   useEffect,
   useLayoutEffect,
@@ -50,6 +51,7 @@ import {
   useRef,
   useState,
   type PointerEvent,
+  type ReactNode,
 } from "react"
 
 import type {
@@ -298,8 +300,12 @@ export type GridEditing = {
   onChange(target: RowTarget, column: string, value: Cell): void
 }
 
-/** How many rows are put on screen at once; the rest wait behind a button. */
-const CHUNK = 300
+/**
+ * Rows drawn beyond either edge of the viewport. Only the rows in view are in
+ * the DOM — every open tab stays mounted, and a few tabs of a few hundred rows
+ * each were tens of thousands of cells.
+ */
+const OVERSCAN = 12
 
 const RATING_ICON: Record<RatingIcon, typeof Star> = {
   star: Star,
@@ -758,15 +764,13 @@ export function DataGrid({
   hidden?: ReadonlySet<string>
   onHide?: (column: string) => void
 }) {
-  const [shown, setShown] = useState(CHUNK)
   const [active, setActive] = useState<{ row: string; column: string } | null>(
     null
   )
   const [expanded, setExpanded] = useState<RowTarget | null>(null)
 
-  // A different result starts from the top again.
+  // A different result starts afresh.
   useEffect(() => {
-    setShown(CHUNK)
     setActive(null)
     setExpanded(null)
   }, [rows])
@@ -897,7 +901,79 @@ export function DataGrid({
     )
   }
 
-  const renderRow = (target: RowTarget, values: (Cell | undefined)[]) => {
+  // The rows that exist, then the ones about to be added, as one list.
+  const total = rows.length + inserts.length
+  const targetAt = (flat: number): RowTarget =>
+    flat < rows.length
+      ? { kind: "row", index: flat }
+      : { kind: "insert", index: flat - rows.length }
+
+  // A cell being typed into stays drawn when it is scrolled away from, or
+  // its edit would be lost with it.
+  const editingIndex = active
+    ? active.row.startsWith("r")
+      ? Number(active.row.slice(1))
+      : rows.length + Number(active.row.slice(1))
+    : -1
+
+  const scroller = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: total,
+    getScrollElement: () => scroller.current,
+    estimateSize: () => (compact ? 25 : 32),
+    overscan: OVERSCAN,
+    // Enough rows on the first draw for the columns to be measured by.
+    initialRect: { width: 0, height: 1000 },
+    rangeExtractor: (range) => {
+      const indexes = defaultRangeExtractor(range)
+      if (editingIndex < 0 || editingIndex >= total || indexes.includes(editingIndex)) {
+        return indexes
+      }
+      return [...indexes, editingIndex].sort((a, b) => a - b)
+    },
+  })
+
+  // Row height changes with the compact setting; every row is measured again.
+  useEffect(() => {
+    virtualizer.measure()
+  }, [compact, virtualizer])
+
+  /**
+   * The rows in view, with an empty row standing in for each run of rows that
+   * is not drawn, so the table is as tall as all of them.
+   */
+  const body = () => {
+    const out: ReactNode[] = []
+    let cursor = 0
+    const spacer = (height: number, key: string) => (
+      <tr key={key} aria-hidden className="grid-spacer">
+        <td colSpan={seen.length + 1} style={{ height }} />
+      </tr>
+    )
+    for (const item of virtualizer.getVirtualItems()) {
+      if (item.start > cursor) out.push(spacer(item.start - cursor, `gap-${item.index}`))
+      const target = targetAt(item.index)
+      out.push(
+        renderRow(
+          target,
+          target.kind === "row"
+            ? (rows[target.index] ?? [])
+            : columns.map((column) => inserts[target.index]?.[column.name]),
+          item.index
+        )
+      )
+      cursor = item.end
+    }
+    const size = virtualizer.getTotalSize()
+    if (size > cursor) out.push(spacer(size - cursor, "gap-end"))
+    return out
+  }
+
+  const renderRow = (
+    target: RowTarget,
+    values: (Cell | undefined)[],
+    flatIndex: number
+  ) => {
     const key = rowKey(target)
     const isInsert = target.kind === "insert"
     const deleted = !isInsert && !!editing?.deleted.has(target.index)
@@ -907,6 +983,8 @@ export function DataGrid({
     return (
       <tr
         key={key}
+        data-index={flatIndex}
+        ref={virtualizer.measureElement}
         className={cn(
           selected && "is-selected",
           isInsert && "is-added",
@@ -1044,18 +1122,15 @@ export function DataGrid({
     )
   }
 
-  const total = rows.length + inserts.length
   const step = (target: RowTarget, by: number): RowTarget | null => {
     const flat = target.kind === "row" ? target.index : rows.length + target.index
     const next = flat + by
     if (next < 0 || next >= total) return null
-    return next < rows.length
-      ? { kind: "row", index: next }
-      : { kind: "insert", index: next - rows.length }
+    return targetAt(next)
   }
 
   return (
-    <div className="h-full overflow-auto">
+    <div ref={scroller} className="h-full overflow-auto">
       <table
         ref={table}
         className={cn(
@@ -1184,30 +1259,8 @@ export function DataGrid({
             })}
           </tr>
         </thead>
-        <tbody>
-          {rows
-            .slice(0, shown)
-            .map((row, index) => renderRow({ kind: "row", index }, row))}
-          {shown >= rows.length &&
-            inserts.map((insert, index) =>
-              renderRow(
-                { kind: "insert", index },
-                columns.map((column) => insert[column.name])
-              )
-            )}
-        </tbody>
+        <tbody>{body()}</tbody>
       </table>
-
-      {rows.length > shown && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShown(shown + CHUNK * 2)}
-          className="sticky left-0 m-2"
-        >
-          Show more rows ({(rows.length - shown).toLocaleString()} hidden)
-        </Button>
-      )}
 
       {expanded && (
         <RecordDialog

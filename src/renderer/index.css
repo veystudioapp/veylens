@@ -341,6 +341,13 @@ textarea {
 .grid-table tr.is-selected td {
   background: color-mix(in oklch, var(--primary) 8%, var(--background));
 }
+/* Stands in for the rows scrolled out of view, which are not drawn. */
+.grid-table tbody tr.grid-spacer td,
+.grid-table tbody tr.grid-spacer:hover td {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 .grid-table td.cell-display {
   color: var(--primary);
   font-weight: 500;
