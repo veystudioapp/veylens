@@ -15,14 +15,14 @@ import { MysqlDriver } from "./mysql"
 import { PostgresDriver } from "./postgres"
 import type { ConnectionConfig, Driver, PlanLimits, QueryOptions } from "./types"
 
-const IP_TYPE: Record<CloudSqlIpType, IpAddressTypes> = {
+export const IP_TYPE: Record<CloudSqlIpType, IpAddressTypes> = {
   public: IpAddressTypes.PUBLIC,
   private: IpAddressTypes.PRIVATE,
   psc: IpAddressTypes.PSC,
 }
 
 /** What went wrong reaching Google, with what to do about it. */
-function withHint(error: unknown): Error {
+export function withHint(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error)
   if (/credential|invalid_grant|invalid_rapt|reauth/i.test(message)) {
     return new Error(

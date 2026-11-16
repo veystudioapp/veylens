@@ -13,6 +13,7 @@ import type { Assist } from "./assist"
 import { describeChanges, refusal, type AuditLog } from "./audit"
 import type { Chats } from "./chats"
 import type { Connections } from "./connections"
+import type { Gateway } from "./gateway"
 import type { Library } from "./library"
 import { bare, explained } from "./db/types"
 import { installMacUpdate } from "./electron-updates"
@@ -62,6 +63,7 @@ export function registerIpc({
   library,
   assist,
   audit,
+  gateway,
   updates,
 }: {
   connections: Connections
@@ -69,6 +71,7 @@ export function registerIpc({
   library: Library
   assist: Assist
   audit: AuditLog
+  gateway: Gateway
   updates: UpdateHost
 }): void {
   const nameOf = (connectionId: string) =>
@@ -289,6 +292,57 @@ export function registerIpc({
     stopChat: (chatId) => chats.stop(chatId),
     answerApproval: async (chatId, toolId, allow) =>
       chats.answerApproval(chatId, toolId, allow),
+
+    getGateway: async () => gateway.state(),
+    saveGateway: async (settings) => {
+      const before = gateway.state().gateways.find((item) => item.id === settings.id)
+      const state = gateway.save(settings)
+      const after = settings.id
+        ? state.gateways.find((item) => item.id === settings.id)!
+        : state.gateways.at(-1)!
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        audit.record({
+          ...mine(null),
+          action: "gateway",
+          status: "ok",
+          summary: !before
+            ? `Created the gateway "${after.name}"`
+            : before.enabled !== after.enabled
+              ? `Turned the gateway "${after.name}" ${after.enabled ? "on" : "off"}`
+              : `Changed the gateway "${after.name}"`,
+          detail: gateway.describe(after.id),
+        })
+      }
+      return state
+    },
+    deleteGateway: async (gatewayId) => {
+      const before = gateway.state().gateways.find((item) => item.id === gatewayId)
+      const state = gateway.remove(gatewayId)
+      if (before) {
+        audit.record({
+          ...mine(null),
+          action: "gateway",
+          status: "ok",
+          summary: `Deleted the gateway "${before.name}"`,
+        })
+      }
+      return state
+    },
+    switchGateway: async (gatewayId, connectionId) => {
+      const before = gateway.state().gateways.find((item) => item.id === gatewayId)
+      const state = gateway.switchTo(gatewayId, connectionId)
+      if (before && before.active !== connectionId) {
+        audit.record({
+          ...mine(connectionId),
+          action: "gateway",
+          status: "ok",
+          summary: `Switched the gateway "${before.name}" from ${gateway.connectionName(before.active)} to ${gateway.connectionName(connectionId)}`,
+          detail: gateway.describe(gatewayId),
+        })
+      }
+      return state
+    },
+    resetGatewayPassword: async () => gateway.resetPassword(),
 
     appVersion: async () => updates.version,
     checkForUpdate: () => checkForUpdate(updates.version, process.platform),

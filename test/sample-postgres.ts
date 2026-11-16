@@ -16,7 +16,7 @@ import { createSampleDb } from "../scripts/sample-db"
  * It reaches into the server for `handleConnection`, which is private: the
  * package offers no public way to serve a stream it did not accept itself.
  */
-class Wire extends Duplex {
+export class Wire extends Duplex {
   peer: Wire | null = null
   remoteAddress = "in-process"
   remotePort = 0

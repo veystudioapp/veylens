@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/resizable"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useStore } from "@/lib/store"
+import { useGatewayWatch } from "@/lib/gateway"
 import { useUpdateWatch } from "@/lib/updates"
 
 import { ChatPanel } from "./components/ChatPanel"
@@ -33,6 +34,7 @@ export function App() {
     void init()
   }, [init])
   useUpdateWatch()
+  useGatewayWatch()
 
   const toggle = (panel: typeof explorer) => {
     if (panel.current?.isCollapsed()) panel.current.expand()
@@ -61,6 +63,7 @@ export function App() {
               <Explorer
                 onCollapse={() => explorer.current?.collapse()}
                 onSettings={() => openSettings("ai")}
+                onGateway={() => openSettings("gateway")}
               />
             </ResizablePanel>
             <ResizableHandle className="w-1.5 bg-transparent" />

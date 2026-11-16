@@ -7,6 +7,7 @@ import { Assist } from "./assist"
 import { AuditLog } from "./audit"
 import { Chats } from "./chats"
 import { Connections, type Secrets } from "./connections"
+import { Gateway } from "./gateway"
 import { registerIpc } from "./ipc"
 import { Library } from "./library"
 
@@ -101,12 +102,18 @@ void app.whenReady().then(() => {
   const audit = new AuditLog(dataDir, broadcast)
   const chats = new Chats(dataDir, connections, library, broadcast, audit)
   const assist = new Assist(dataDir, connections, library)
+  const gateway = new Gateway(path.join(dataDir, "gateway.json"), connections, (state) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send(IPC.gatewayState, state)
+    }
+  })
   registerIpc({
     connections,
     chats,
     library,
     assist,
     audit,
+    gateway,
     updates: {
       version: app.getVersion(),
       packaged: app.isPackaged,
@@ -138,6 +145,7 @@ void app.whenReady().then(() => {
   app.on("before-quit", () => {
     chats.closeAll()
     assist.cancelAll()
+    gateway.close()
     void connections.closeAll()
   })
 })

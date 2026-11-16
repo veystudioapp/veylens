@@ -230,6 +230,12 @@ export class Connections {
     }
   }
 
+  /** Everything needed to reach the connection's server, password
+   * included: for the gateway, which signs in as it. */
+  serverConfig(id: string): ConnectionConfig {
+    return this.config(this.find(id))
+  }
+
   /** What this app lets anyone do through the connection. */
   access(id: string): AccessMode {
     return this.find(id).access ?? "read_write"

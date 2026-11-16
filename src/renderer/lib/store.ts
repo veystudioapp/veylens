@@ -64,7 +64,8 @@ export type Tab =
   | { id: string; kind: "dashboard"; connectionId: string; dashboardId: string }
   | { id: string; kind: "knowledge"; connectionId: string }
 
-export type SettingsSection = "ai" | "skills" | "tools" | "permissions" | "audit" | "updates"
+export type SettingsSection =
+  "ai" | "skills" | "tools" | "permissions" | "audit" | "gateway" | "updates"
 
 export type ConnectionDialog =
   { mode: "new" } | { mode: "edit"; connection: Connection } | null

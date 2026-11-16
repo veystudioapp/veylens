@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils"
 import { confirm } from "./confirm"
 import { IconButton } from "./icon-button"
 import { promptText } from "./prompt"
+import { GatewayBar } from "./gateway-switch"
 import { UpdatePill } from "./update-pill"
 
 const ENGINE_LABEL = { postgres: "PostgreSQL", mysql: "MySQL" } as const
@@ -570,9 +571,11 @@ function ConnectionNode({
 export function Explorer({
   onCollapse,
   onSettings,
+  onGateway,
 }: {
   onCollapse: () => void
   onSettings: () => void
+  onGateway: () => void
 }) {
   const connections = useStore((state) => state.connections)
   const openDialog = useStore((state) => state.openDialog)
@@ -648,6 +651,7 @@ export function Explorer({
         )}
       </div>
 
+      <GatewayBar onOpen={onGateway} />
       <div className="flex shrink-0 items-center gap-1 border-t border-sidebar-border p-1.5">
         <button
           type="button"

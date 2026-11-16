@@ -4,6 +4,7 @@ import {
   IPC,
   type ChatEvent,
   type DesktopApi,
+  type GatewayState,
   type UpdateProgress,
 } from "../shared/api"
 
@@ -84,6 +85,21 @@ const api: DesktopApi = {
     ipcRenderer.on(IPC.chatEvent, handler)
     return () => {
       ipcRenderer.off(IPC.chatEvent, handler)
+    }
+  },
+
+  getGateway: () => ipcRenderer.invoke(IPC.getGateway),
+  saveGateway: (settings) => ipcRenderer.invoke(IPC.saveGateway, settings),
+  deleteGateway: (gatewayId) => ipcRenderer.invoke(IPC.deleteGateway, gatewayId),
+  switchGateway: (gatewayId, connectionId) =>
+    ipcRenderer.invoke(IPC.switchGateway, gatewayId, connectionId),
+  resetGatewayPassword: () => ipcRenderer.invoke(IPC.resetGatewayPassword),
+  onGatewayState: (listener) => {
+    const handler = (_event: IpcRendererEvent, payload: GatewayState) =>
+      listener(payload)
+    ipcRenderer.on(IPC.gatewayState, handler)
+    return () => {
+      ipcRenderer.off(IPC.gatewayState, handler)
     }
   },
 

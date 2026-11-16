@@ -149,6 +149,51 @@ export type ConnectionInput = Omit<
   access?: AccessMode
 }
 
+// ── Gateway ────────────────────────────────────────────────────────────────
+
+/**
+ * A port on this machine that an app under development connects to instead
+ * of a database. It is for one engine and holds a few saved connections of
+ * it ("PG local", "PG dev", …); the app's connections go to the one picked,
+ * the gateway signing in as it. Picking another is the switch: the app's
+ * `.env` never changes.
+ */
+export type GatewaySettings = {
+  /** Empty for one not saved yet. */
+  id: string
+  name: string
+  engine: Engine
+  /** On 127.0.0.1. */
+  port: number
+  enabled: boolean
+  /** The saved connections it can go to, in order. */
+  connections: string[]
+  /** The one it goes to now; null while it holds none. */
+  active: string | null
+}
+
+export type GatewayStatus = {
+  gatewayId: string
+  listening: boolean
+  /** Why it is not listening: the port is taken, say. */
+  error: string | null
+  /** App connections open through it now. */
+  sessions: number
+}
+
+export type GatewayState = {
+  gateways: GatewaySettings[]
+  /** What apps sign in to every gateway with, whatever user they name. It
+   * goes in their `.env`, so it is shown. */
+  password: string
+  status: GatewayStatus[]
+}
+
+export const GATEWAY_DEFAULT_PORT: Record<Engine, number> = {
+  postgres: 15432,
+  mysql: 13306,
+}
+
 // ── Schema ─────────────────────────────────────────────────────────────────
 
 export type TreeTable = { name: string; kind: "table" | "view" }
@@ -1034,6 +1079,7 @@ export const AUDIT_ACTIONS = [
   "connection",
   "permissions",
   "tools",
+  "gateway",
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
@@ -1173,6 +1219,21 @@ export type DesktopApi = {
   answerApproval(chatId: string, toolId: string, allow: boolean): Promise<void>
   onChatEvent(listener: (event: ChatEvent) => void): () => void
 
+  getGateway(): Promise<GatewayState>
+  /** Adds one (an empty id) or replaces it, and starts, stops or moves its
+   * port as it says. Sessions to a connection it no longer goes to are
+   * closed. */
+  saveGateway(settings: GatewaySettings): Promise<GatewayState>
+  /** Its ports stop listening and its sessions are closed. */
+  deleteGateway(gatewayId: string): Promise<GatewayState>
+  /** Points the gateway at one of its connections, closing the sessions
+   * open to the old one so the app's pool reconnects. */
+  switchGateway(gatewayId: string, connectionId: string): Promise<GatewayState>
+  /** A new password: apps already signed in stay. */
+  resetGatewayPassword(): Promise<GatewayState>
+  /** Ports opening or failing, sessions coming and going, a switch. */
+  onGatewayState(listener: (state: GatewayState) => void): () => void
+
   /** This build's version. */
   appVersion(): Promise<string>
   /** Asks GitHub for the latest release. An unreachable GitHub is `unknown`,
@@ -1263,6 +1324,12 @@ export const IPC = {
   stopChat: "chats:stop",
   answerApproval: "chats:approval",
   chatEvent: "chats:event",
+  getGateway: "gateway:get",
+  saveGateway: "gateway:save",
+  deleteGateway: "gateway:delete",
+  switchGateway: "gateway:switch",
+  resetGatewayPassword: "gateway:reset-password",
+  gatewayState: "gateway:state",
   appVersion: "app:version",
   checkForUpdate: "update:check",
   installUpdate: "update:install",

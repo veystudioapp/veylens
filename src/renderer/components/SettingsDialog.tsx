@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Table2,
   Trash2,
+  Waypoints,
   Wrench,
   X,
   type LucideIcon,
@@ -88,6 +89,7 @@ import { installLabel, pendingUpdate, useUpdates } from "@/lib/updates"
 import { cn } from "@/lib/utils"
 
 import { AuditLogPage } from "./AuditLogPage"
+import { GatewayPage } from "./GatewayPage"
 import { confirm } from "./confirm"
 import { IconButton } from "./icon-button"
 import { Markdown } from "./Markdown"
@@ -1619,6 +1621,7 @@ const NAV: {
     items: [
       { id: "permissions", label: "Permissions", icon: ShieldCheck, tone: "green" },
       { id: "audit", label: "Audit log", icon: History, tone: "teal" },
+      { id: "gateway", label: "Gateways", icon: Waypoints, tone: "pink" },
     ],
   },
   {
@@ -1643,7 +1646,7 @@ export function SettingsDialog({
         <nav className="flex w-52 shrink-0 flex-col border-r bg-sidebar px-2 py-3">
           <DialogTitle className="px-2.5 pb-2 text-[13px] font-semibold">Settings</DialogTitle>
           <DialogDescription className="sr-only">
-            The assistant's models, language, skills and tools, what each connection allows, and the audit log
+            The assistant's models, language, skills and tools, what each connection allows, the audit log and the gateway
           </DialogDescription>
           {NAV.map((group) => (
             <div key={group.heading} className="flex flex-col gap-px pt-3">
@@ -1680,6 +1683,8 @@ export function SettingsDialog({
           <ToolsPage />
         ) : section === "audit" ? (
           <AuditLogPage />
+        ) : section === "gateway" ? (
+          <GatewayPage />
         ) : section === "updates" ? (
           <UpdatesPage />
         ) : (

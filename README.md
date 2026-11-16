@@ -42,6 +42,15 @@ bun run package    # electron-builder → release/
 
 ## What it does
 
+- **Gateways** — Settings › Gateways. A gateway is a port on `127.0.0.1`
+  for one engine (PostgreSQL or MySQL) that the app you are building
+  connects to instead of a database. Add a few saved connections of that
+  engine to it (local, dev, staging…) and pick which one the app goes to,
+  there or at the foot of the explorer; the gateway signs in as that
+  connection (user, password, database, SSL, Cloud SQL), so the app's
+  `.env` never changes. Picking another closes the sessions open to the old
+  one and the app's pool reconnects. Vey Lens's access modes and
+  permissions do not apply through it (`src/main/gateway/`).
 - **Explorer** — saved connections, their schemas, tables and views; search.
   A connection can be given a colour (red for production, say): its icon
   and its open tab carry it. Every kind of thing has its own colour across

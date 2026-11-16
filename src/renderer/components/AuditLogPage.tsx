@@ -16,6 +16,7 @@ import {
   SquareTerminal,
   Trash2,
   User,
+  Waypoints,
   Wrench,
   Sparkles,
   type LucideIcon,
@@ -46,6 +47,7 @@ const ACTION_LOOK: Record<AuditAction, { label: string; icon: LucideIcon; tone: 
   connection: { label: "Connection", icon: Database, tone: "teal" },
   permissions: { label: "Permissions", icon: ShieldCheck, tone: "green" },
   tools: { label: "Tools", icon: Wrench, tone: "amber" },
+  gateway: { label: "Gateway", icon: Waypoints, tone: "pink" },
 }
 
 /** What can be picked to narrow the list. */
@@ -62,7 +64,7 @@ const ACTORS = { all: "Anyone", you: "You", assistant: "Assistant" }
 type Actor = keyof typeof ACTORS
 
 const CHANGES = new Set<AuditAction>(["write", "edit_rows", "plan"])
-const SETTINGS = new Set<AuditAction>(["connection", "permissions", "tools", "dashboard", "context"])
+const SETTINGS = new Set<AuditAction>(["connection", "permissions", "tools", "dashboard", "context", "gateway"])
 
 function matchesKind(entry: AuditEntry, kind: Kind): boolean {
   switch (kind) {
