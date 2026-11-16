@@ -158,7 +158,7 @@ export function mentionTargets(sources: MentionSources): MentionTarget[] {
       token,
       tokens: [token],
       label: other.name,
-      detail: other.engine === "postgres" ? "PostgreSQL" : "MySQL",
+      detail: other.engine === "postgres" ? "PostgreSQL" : other.engine === "mysql" ? "MySQL" : "Files",
     })
   }
 

@@ -24,6 +24,7 @@ import {
   type DashboardFilter,
   type DashboardTile,
   type DatePreset,
+  type Engine,
   type FilterKind,
   type TextMatch,
   type Tone,
@@ -120,7 +121,7 @@ function blank(kind: FilterKind, name: string): DashboardFilter {
 }
 
 /** How a tile's SQL would use a filter, for a column guessed or named. */
-function snippetOf(filter: DashboardFilter, engine: "postgres" | "mysql"): string {
+function snippetOf(filter: DashboardFilter, engine: Engine): string {
   const name = filter.name
   switch (filter.kind) {
     case "date_range":
@@ -130,7 +131,8 @@ function snippetOf(filter: DashboardFilter, engine: "postgres" | "mysql"): strin
     case "multi_select":
       return `WHERE true\n  [[AND ${listedColumn(filter.optionsSql) ?? name} IN ({{${name}}})]]`
     case "text":
-      return `WHERE true\n  [[AND name ${engine === "postgres" ? "ILIKE" : "LIKE"} {{${name}}}]]`
+      // DuckDB's LIKE takes no escape character unless given one.
+      return `WHERE true\n  [[AND name ${engine === "mysql" ? "LIKE" : "ILIKE"} {{${name}}}${engine === "duckdb" ? " ESCAPE '\\'" : ""}]]`
     case "number_range":
       return `WHERE true\n  [[AND total >= {{${name}_min}}]]\n  [[AND total <= {{${name}_max}}]]`
     case "toggle":

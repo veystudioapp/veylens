@@ -23,7 +23,8 @@ const shared = {
   outExtension: { ".js": ".cjs" },
   // The database drivers carry dynamic requires esbuild cannot follow, so they
   // stay real packages resolved from node_modules — Cloud SQL's connector
-  // too, with Google's auth library beneath it.
+  // too, with Google's auth library beneath it, which the Google Sheets
+  // reader uses as well. DuckDB is a native module.
   external: [
     "electron",
     "pg",
@@ -31,6 +32,8 @@ const shared = {
     "mysql2",
     "mysql2/promise",
     "@google-cloud/cloud-sql-connector",
+    "google-auth-library",
+    "@duckdb/node-api",
   ],
   sourcemap: true,
   minify: values.minify,
@@ -46,7 +49,14 @@ await Promise.all([
     banner: {
       js: `const __importMetaUrl = require("node:url").pathToFileURL(__filename).href;`,
     },
-    define: { "import.meta.url": "__importMetaUrl" },
+    define: {
+      "import.meta.url": "__importMetaUrl",
+      // The Google OAuth client ("Desktop app") Sign in with Google uses,
+      // from the environment the app is built in; empty, it is imported in
+      // the app instead. A desktop client's secret is not a secret.
+      "process.env.VEYLENS_GOOGLE_CLIENT_ID": JSON.stringify(process.env.VEYLENS_GOOGLE_CLIENT_ID ?? ""),
+      "process.env.VEYLENS_GOOGLE_CLIENT_SECRET": JSON.stringify(process.env.VEYLENS_GOOGLE_CLIENT_SECRET ?? ""),
+    },
   }),
   // Its own build: the preload is sandboxed and cannot take the banner's
   // `require("node:url")`.

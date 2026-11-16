@@ -49,6 +49,21 @@ export function errorOffset(error: unknown, sql: string, engine: Engine): number
       : null
   }
   const message = error.message
+  if (engine === "duckdb") {
+    // Parser Error: syntax error at or near "fro"
+    const token = /at or near "((?:[^"]|"")*)"/.exec(message)?.[1]?.replaceAll('""', '"')
+    if (token) {
+      const at = sql.indexOf(token)
+      return at === -1 ? null : at
+    }
+    if (/at end of input/.test(message)) return sql.trimEnd().length
+    // Binder Error: Referenced column "x" not found… / Table with name x does not exist!
+    const named =
+      /Referenced column "((?:[^"]|"")+)" not found/.exec(message) ??
+      /Table with name ([^\s!]+) does not exist/.exec(message) ??
+      /Scalar Function with name (\w+) does not exist/.exec(message)
+    return named ? findName(sql, named[1]!.replaceAll('""', '"')) : null
+  }
   const near = /near '([\s\S]*)' at line (\d+)$/.exec(message)
   if (near) {
     const [, text, line] = near

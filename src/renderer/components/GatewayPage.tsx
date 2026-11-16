@@ -15,7 +15,7 @@ import { useEffect, useState } from "react"
 import {
   GATEWAY_DEFAULT_PORT,
   type Connection,
-  type Engine,
+  type ServerEngine,
   type GatewaySettings,
   type GatewayStatus,
   type Tone,
@@ -29,13 +29,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
+import { ENGINE_LABEL, ENGINE_LOGO } from "@/lib/engines"
 import { envSnippet, useGateway } from "@/lib/gateway"
 import { useStore } from "@/lib/store"
 import { connectionTone, toneColor } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 
 import { confirm } from "./confirm"
-import { ENGINE_LOGO, useGatewayConnections, usePick } from "./gateway-switch"
+import { useGatewayConnections, usePick } from "./gateway-switch"
 import { IconButton } from "./icon-button"
 import { Switch } from "./switch"
 
@@ -46,7 +47,6 @@ import { Switch } from "./switch"
  * pick one. Every change is saved as it is made.
  */
 
-const ENGINE_LABEL: Record<Engine, string> = { postgres: "PostgreSQL", mysql: "MySQL" }
 
 const wash = (tone: Tone, percent: number) =>
   `color-mix(in oklch, ${toneColor(tone)} ${percent}%, transparent)`
@@ -364,7 +364,7 @@ export function GatewayPage() {
     )
   }
 
-  const create = (engine: Engine) => {
+  const create = (engine: ServerEngine) => {
     const ports = new Set(state.gateways.map((gateway) => gateway.port))
     let port = GATEWAY_DEFAULT_PORT[engine]
     while (ports.has(port)) port++

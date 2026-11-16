@@ -19,6 +19,8 @@ export type Dialect = {
   /** A column rendered as text, for LIKE against any type. */
   asText(expression: string): string
   like: string
+  /** Said after a pattern when backslash is not the engine's escape by default. */
+  likeEscape?: string
 }
 
 export const POSTGRES: Dialect = {
@@ -26,6 +28,15 @@ export const POSTGRES: Dialect = {
   param: (n) => `$${n}`,
   asText: (expression) => `${expression}::text`,
   like: "ILIKE",
+}
+
+/** DuckDB's SQL is Postgres's here, but LIKE has no escape unless told. */
+export const DUCKDB: Dialect = {
+  quote: POSTGRES.quote,
+  param: POSTGRES.param,
+  asText: (expression) => `CAST(${expression} AS VARCHAR)`,
+  like: "ILIKE",
+  likeEscape: " ESCAPE '\\'",
 }
 
 export const MYSQL: Dialect = {
@@ -68,7 +79,7 @@ const COMPARISONS: Record<string, string> = {
 function condition(dialect: Dialect, filter: Filter, params: Params): string {
   const column = dialect.quote(filter.column)
   const pattern = (text: string) =>
-    `${dialect.asText(column)} ${dialect.like} ${params.add(text)}`
+    `${dialect.asText(column)} ${dialect.like} ${params.add(text)}${dialect.likeEscape ?? ""}`
 
   switch (filter.op) {
     case "is_null":

@@ -21,7 +21,7 @@ export { serveMysql } from "./mysql"
 export { servePostgres } from "./postgres"
 
 const ENGINES: Engine[] = ["postgres", "mysql"]
-const ENGINE_NAME: Record<Engine, string> = { postgres: "PostgreSQL", mysql: "MySQL" }
+const ENGINE_NAME: Record<Engine, string> = { postgres: "PostgreSQL", mysql: "MySQL", duckdb: "Files" }
 
 /** How long reaching a server's port may take. */
 const CONNECT_MS = 10_000

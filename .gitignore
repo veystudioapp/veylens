@@ -8,3 +8,8 @@ release
 .idea
 .vscode/*
 !.vscode/extensions.json
+
+# Local settings, e.g. the Google OAuth client (see .env.example)
+.env
+.env.*
+!.env.example

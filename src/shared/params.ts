@@ -19,7 +19,8 @@
  */
 import type { Cell, DashboardFilter, DatePreset, ParamValues, TextMatch } from "./api"
 
-export type ParamDialect = "postgres" | "mysql"
+/** DuckDB binds and quotes as Postgres does. */
+export type ParamDialect = "postgres" | "mysql" | "duckdb"
 
 const PARAM = /\{\{\s*([A-Za-z_]\w*)\s*\}\}/g
 const BLOCK = /\[\[([\s\S]*?)\]\]/g
@@ -174,8 +175,8 @@ export function dateRange(
 // ── Other filters ──────────────────────────────────────────────────────────
 
 /** Words typed into a text filter as a LIKE pattern: `%` and `_` in them
- * match themselves, escaped with `\`, which LIKE takes by default on both
- * engines. */
+ * match themselves, escaped with `\`, which LIKE takes by default on
+ * Postgres and MySQL; DuckDB needs `ESCAPE '\'` after the pattern. */
 export function likePattern(words: string, match: TextMatch): string {
   if (match === "exact") return words
   const escaped = words.replace(/[\\%_]/g, (char) => `\\${char}`)

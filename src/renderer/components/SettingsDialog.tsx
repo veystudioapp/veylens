@@ -28,7 +28,7 @@ import {
 } from "lucide-react"
 import { useEffect, useState, type ReactNode } from "react"
 
-import { addressOf } from "@shared/address"
+import { locationOf } from "@shared/address"
 import {
   TOOL_CATALOG,
   effectiveToolMode,
@@ -82,6 +82,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { ACCESS_DETAIL, ACCESS_ICON, ACCESS_LABEL } from "@/lib/access"
+import { ENGINE_LABEL } from "@/lib/engines"
 import { useAgentModels } from "@/lib/models"
 import { errorMessage, useStore, type SettingsSection } from "@/lib/store"
 import { connectionTone, IconTile, KIND_TONE } from "@/lib/tones"
@@ -747,7 +748,6 @@ function ToolsPage() {
 
 // ── Permissions ────────────────────────────────────────────────────────────
 
-const ENGINE_LABEL = { postgres: "PostgreSQL", mysql: "MySQL" } as const
 
 const ACCESS_TONE: Record<AccessMode, string> = {
   read_write: "",
@@ -1063,8 +1063,7 @@ function ConnectionPermissions({ connection }: { connection: Connection }) {
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13px] font-medium">{connection.name}</span>
             <span className="block truncate text-[11px] text-muted-foreground">
-              {ENGINE_LABEL[connection.engine]} · {connection.user}@{addressOf(connection)}
-              {connection.database ? `/${connection.database}` : ""}
+              {ENGINE_LABEL[connection.engine]} · {locationOf(connection)}
             </span>
           </span>
         </button>
@@ -1073,7 +1072,8 @@ function ConnectionPermissions({ connection }: { connection: Connection }) {
           label={`Access for ${connection.name}`}
           value={access}
           onChange={(next) => void attempt(() => setAccess(connection.id, next))}
-          options={ACCESS_MODES.map((mode) => ({
+          // Files are read, never written: there is nothing else to pick.
+          options={(connection.engine === "duckdb" ? (["read_only"] as const) : ACCESS_MODES).map((mode) => ({
             value: mode,
             className: ACCESS_TONE[mode],
             label: (

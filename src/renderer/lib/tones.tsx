@@ -25,7 +25,8 @@ export const toneColor = (tone: Tone) => `var(--tone-${tone})`
 
 /** A connection's colour: the one picked, or its engine's. */
 export const connectionTone = (connection: Pick<Connection, "engine" | "color">): Tone =>
-  connection.color ?? (connection.engine === "postgres" ? "blue" : "orange")
+  connection.color ??
+  (connection.engine === "postgres" ? "blue" : connection.engine === "duckdb" ? "green" : "orange")
 
 /** An icon drawn in a tone. */
 export const toneStyle = (tone: Tone): CSSProperties => ({ color: toneColor(tone) })

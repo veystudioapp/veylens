@@ -156,7 +156,7 @@ export function tokenize(sql: string, engine: Engine): Token[][] {
       }
       i++
       current.push({ kind: "punct", text: "''" })
-    } else if (c === "$" && engine === "postgres" && /^\$[A-Za-z_]*\$/.test(sql.slice(i))) {
+    } else if (c === "$" && engine !== "mysql" && /^\$[A-Za-z_]*\$/.test(sql.slice(i))) {
       const tag = /^\$[A-Za-z_]*\$/.exec(sql.slice(i))![0]
       const end = sql.indexOf(tag, i + tag.length)
       i = end < 0 ? n : end + tag.length
@@ -203,7 +203,11 @@ const SESSION = new Set([
   "reset", "use", "discard", "listen", "unlisten", "notify", "lock", "analyze",
   "checkpoint", "show", "deallocate", "abort",
 ])
-const READ = new Set(["select", "show", "describe", "desc", "table", "values", "help"])
+const READ = new Set([
+  "select", "show", "describe", "desc", "table", "values", "help",
+  // DuckDB: FROM t on its own; SUMMARIZE, PIVOT and UNPIVOT read a table.
+  "from", "summarize", "pivot", "unpivot",
+])
 
 /** The first data-changing keyword in a statement's top level and its CTEs. */
 function writeIn(tokens: Token[]): StatementKind | null {
@@ -381,6 +385,9 @@ export function referencesIn(tokens: Token[], defaultSchema: string): Reference[
       list = true
     } else if (word === "copy" && index === 0) {
       written = cls === "insert"
+    } else if (["summarize", "pivot", "unpivot"].includes(word) && index === 0) {
+      // DuckDB: SUMMARIZE t, PIVOT t ON …, UNPIVOT t ON … read t.
+      written = false
     } else if (word === "handler" && index === 0) {
       // MySQL's HANDLER t OPEN / READ: reads a table with no FROM.
       written = false
@@ -432,6 +439,8 @@ const OPAQUE_FUNCTIONS = new Set([
   "set_config",
   // MySQL: the server's files.
   "load_file",
+  // DuckDB: a table or a query given as text.
+  "query", "query_table",
 ])
 
 /** Catalogs that hold sample values from every table's columns. */
@@ -464,7 +473,7 @@ function opaqueIn(tokens: Token[], engine: Engine, defaultSchema: string): strin
       reasons.push("Changing search_path moves where a bare table name is looked for.")
     }
   }
-  if (engine === "postgres" && first === "create") {
+  if (engine !== "mysql" && first === "create") {
     // CREATE [OR REPLACE] FUNCTION|PROCEDURE: a body in a string, read by no one here.
     const kind = second === "or" ? lower(tokens[tokens.findIndex((token) => token.text !== "(") + 3]) : second
     if (kind === "function" || kind === "procedure") {
@@ -733,7 +742,7 @@ export function judgeChanges(changes: ChangeSet, context: Omit<Context, "engine"
 
 /** Where an unqualified table name is looked for. */
 export const defaultSchemaOf = (connection: { engine: Engine; database: string }) =>
-  connection.engine === "postgres" ? "public" : connection.database
+  connection.engine === "postgres" ? "public" : connection.engine === "duckdb" ? "main" : connection.database
 
 /** The hidden and structure-only tables some SQL names, and what reaches a
  * table without naming it, as reasons to refuse it — for a read, or a dry

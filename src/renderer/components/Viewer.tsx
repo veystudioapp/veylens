@@ -40,6 +40,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { ENGINE_LABEL } from "@/lib/engines"
 import { useStore, type Tab } from "@/lib/store"
 import {
   connectionTone,
@@ -48,7 +49,7 @@ import {
   toneColor,
   toneStyle,
 } from "@/lib/tones"
-import { addressOf } from "@shared/address"
+import { locationOf } from "@shared/address"
 import type { Tone } from "@shared/api"
 import { cn } from "@/lib/utils"
 
@@ -493,9 +494,7 @@ function StartPage() {
               {connection.name}
             </h1>
             <p className="truncate text-xs text-muted-foreground">
-              {connection.engine === "postgres" ? "PostgreSQL" : "MySQL"} ·{" "}
-              {connection.user}@{addressOf(connection)}
-              {connection.database ? `/${connection.database}` : ""}
+              {ENGINE_LABEL[connection.engine]} · {locationOf(connection)}
             </p>
           </div>
         </div>

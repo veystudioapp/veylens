@@ -212,9 +212,9 @@ const RESERVED = new Set(
 
 /** A name as it has to be written: quoted when it would not read as itself. */
 export function quoteName(name: string, engine: Engine): string {
-  const plain = engine === "postgres" ? /^[a-z_][a-z0-9_$]*$/ : /^[A-Za-z_][\w$]*$/
+  const plain = engine === "mysql" ? /^[A-Za-z_][\w$]*$/ : /^[a-z_][a-z0-9_$]*$/
   if (plain.test(name) && !RESERVED.has(name.toLowerCase())) return name
-  return engine === "postgres" ? `"${name.replaceAll('"', '""')}"` : `\`${name.replaceAll("`", "``")}\``
+  return engine === "mysql" ? `\`${name.replaceAll("`", "``")}\`` : `"${name.replaceAll('"', '""')}"`
 }
 
 export const COMPLETION_LIMIT = 200

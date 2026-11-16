@@ -3,6 +3,7 @@ import type {
   Cell,
   ChangeSet,
   CloudSql,
+  DataSource,
   Engine,
   PlanStepResult,
   QueryResult,
@@ -28,6 +29,10 @@ export type ConnectionConfig = {
   cloudSql?: CloudSql | null
   /** `read_only` opens every session read-only, on the server's side too. */
   access?: AccessMode
+  /** What a `duckdb` connection reads. */
+  sources?: DataSource[]
+  /** Where a `duckdb` connection may keep copies it makes of its files. */
+  cacheRoot?: string
 }
 
 export type QueryOptions = {

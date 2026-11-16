@@ -53,7 +53,25 @@ jobs:
             exit 1
           fi
 
+      # The Google OAuth client built in for "Sign in with Google"; unset, the
+      # app asks for the client's JSON instead.
       - run: bun run build
+        env:
+          VEYLENS_GOOGLE_CLIENT_ID: ${{ secrets.VEYLENS_GOOGLE_CLIENT_ID }}
+          VEYLENS_GOOGLE_CLIENT_SECRET: ${{ secrets.VEYLENS_GOOGLE_CLIENT_SECRET }}
+
+      # DuckDB's native binding is a package per platform, and bun installs
+      # only this runner's (arm64). The x64 app needs the x64 one beside it.
+      - name: Add DuckDB's x64 binding
+        if: matrix.name == 'macos'
+        shell: bash
+        run: |
+          version=$(node -p "require('./node_modules/@duckdb/node-bindings/package.json').version")
+          npm pack "@duckdb/node-bindings-darwin-x64@$version" --pack-destination "$RUNNER_TEMP"
+          mkdir -p node_modules/@duckdb/node-bindings-darwin-x64
+          tar -xzf "$RUNNER_TEMP"/duckdb-node-bindings-darwin-x64-*.tgz \
+            -C node_modules/@duckdb/node-bindings-darwin-x64 --strip-components=1
+          ls -l node_modules/@duckdb/
 
       # Imported into our own keychain rather than via CSC_LINK: electron-builder's
       # throwaway keychain fails on the runner at set-key-partition-list.

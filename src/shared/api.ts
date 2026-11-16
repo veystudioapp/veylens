@@ -14,7 +14,53 @@ export type { ChatImage } from "./chat-images"
 
 // ── Connections ────────────────────────────────────────────────────────────
 
-export type Engine = "postgres" | "mysql"
+/**
+ * `duckdb` is not a server: it is files — Excel, CSV, Parquet, JSON — and
+ * Google Sheets, loaded into an in-process DuckDB and queried with its SQL.
+ */
+export type Engine = "postgres" | "mysql" | "duckdb"
+
+/** The engines that are a server at a host and port. */
+export type ServerEngine = Exclude<Engine, "duckdb">
+
+export const isServerEngine = (engine: Engine): engine is ServerEngine => engine !== "duckdb"
+
+/**
+ * Where a Google Sheet is read from: `link`, its export as anyone with the
+ * link may download it, no sign-in; `google`, the Sheets API as this
+ * machine's Application Default Credentials, for a sheet shared privately.
+ */
+export const SHEET_ACCESS = ["link", "google"] as const
+export type SheetAccess = (typeof SHEET_ACCESS)[number]
+
+/**
+ * What a files connection reads. A workbook (an Excel file or a Google
+ * Sheet) is a schema with a table per sheet; a CSV, Parquet or JSON file is
+ * a table in `main`.
+ */
+export type DataSource =
+  | { kind: "file"; path: string }
+  | { kind: "google_sheet"; url: string; access: SheetAccess }
+
+/**
+ * The Google account private Google Sheets are read as, signed in from the
+ * app. `client` is the OAuth client signing in goes through: one built into
+ * this build, one imported from its JSON, or none yet.
+ */
+export type GoogleAccountState = {
+  email: string | null
+  client: "built_in" | "imported" | null
+  /** The browser is open, waiting for Google to send it back. */
+  signingIn: boolean
+}
+
+/** The files a files connection can be given, by extension. */
+export const DATA_FILE_EXTENSIONS = {
+  workbook: ["xlsx", "xlsm", "xlsb", "xls", "ods"],
+  csv: ["csv", "tsv", "txt"],
+  parquet: ["parquet"],
+  json: ["json", "jsonl", "ndjson"],
+} as const
 
 /** `require` encrypts without checking the certificate; `verify` checks it. */
 export type SslMode = "off" | "require" | "verify"
@@ -127,6 +173,8 @@ export type Connection = {
   ssl: SslMode
   /** Set, the host, port and SSL are not used: the connector reaches it. */
   cloudSql: CloudSql | null
+  /** What a `duckdb` connection reads; empty for a server. */
+  sources: DataSource[]
   access: AccessMode
   permissions: Permissions
   /** Picked by the user — red for production, say; null follows the engine. */
@@ -137,10 +185,12 @@ export type Connection = {
 
 export type ConnectionInput = Omit<
   Connection,
-  "id" | "hasPassword" | "access" | "color" | "permissions" | "cloudSql"
+  "id" | "hasPassword" | "access" | "color" | "permissions" | "cloudSql" | "sources"
 > & {
   /** `undefined` keeps the stored colour. */
   color?: Tone | null
+  /** `undefined` keeps the stored sources. */
+  sources?: DataSource[]
   /** `undefined` keeps the stored setting; null is a plain host and port. */
   cloudSql?: CloudSql | null
   /** `undefined` keeps the stored password; a string (even empty) replaces it. */
@@ -162,7 +212,7 @@ export type GatewaySettings = {
   /** Empty for one not saved yet. */
   id: string
   name: string
-  engine: Engine
+  engine: ServerEngine
   /** On 127.0.0.1. */
   port: number
   enabled: boolean
@@ -189,7 +239,7 @@ export type GatewayState = {
   status: GatewayStatus[]
 }
 
-export const GATEWAY_DEFAULT_PORT: Record<Engine, number> = {
+export const GATEWAY_DEFAULT_PORT: Record<ServerEngine, number> = {
   postgres: 15432,
   mysql: 13306,
 }
@@ -1140,6 +1190,19 @@ export type DesktopApi = {
   deleteConnection(id: string): Promise<void>
   /** Resolves with the server's version line, rejects with why it failed. */
   testConnection(id: string | null, input: ConnectionInput): Promise<string>
+  /** The system's file picker, for a files connection's sources: the paths
+   * picked, none when it is cancelled. */
+  pickDataFiles(): Promise<string[]>
+
+  googleAccount(): Promise<GoogleAccountState>
+  /** Picks the OAuth client's JSON (a "Desktop app" client) and keeps it. */
+  importGoogleClient(): Promise<GoogleAccountState>
+  /** Back to the built-in client, if this build has one; signs out. */
+  forgetGoogleClient(): Promise<GoogleAccountState>
+  /** Opens the browser on Google's sign-in and resolves once it is back. */
+  signInWithGoogle(): Promise<GoogleAccountState>
+  cancelGoogleSignIn(): Promise<void>
+  signOutOfGoogle(): Promise<GoogleAccountState>
 
   getTree(connectionId: string): Promise<TreeSchema[]>
   /** Every schema and table, hidden ones too: for setting permissions. */
@@ -1284,6 +1347,13 @@ export const IPC = {
   saveConnection: "connections:save",
   deleteConnection: "connections:delete",
   testConnection: "connections:test",
+  pickDataFiles: "connections:pick-files",
+  googleAccount: "google:account",
+  importGoogleClient: "google:import-client",
+  forgetGoogleClient: "google:forget-client",
+  signInWithGoogle: "google:sign-in",
+  cancelGoogleSignIn: "google:cancel-sign-in",
+  signOutOfGoogle: "google:sign-out",
   getTree: "db:tree",
   getTable: "db:table",
   getTableDetails: "db:table-details",

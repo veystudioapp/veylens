@@ -3,9 +3,8 @@ import { CircleAlert } from "lucide-react"
 import type { Connection, GatewaySettings, GatewayState } from "@shared/api"
 
 import { Spinner } from "@/components/ui/spinner"
-import { MySQL } from "@/components/ui/svgs/mysql"
-import { PostgreSQL } from "@/components/ui/svgs/postgresql"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { ENGINE_LOGO } from "@/lib/engines"
 import { useGateway } from "@/lib/gateway"
 import { useStore } from "@/lib/store"
 import { connectionTone, toneColor } from "@/lib/tones"
@@ -13,7 +12,6 @@ import { connectionTone, toneColor } from "@/lib/tones"
 import { confirm } from "./confirm"
 import { SimpleSelect } from "./simple-select"
 
-export const ENGINE_LOGO = { postgres: PostgreSQL, mysql: MySQL } as const
 
 /** A gateway's connections, as saved connections, in its order. */
 export function useGatewayConnections(gateway: GatewaySettings): Connection[] {

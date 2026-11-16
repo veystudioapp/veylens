@@ -12,6 +12,11 @@ const READ_KEYWORDS = new Set([
   "desc",
   "table",
   "values",
+  // DuckDB's: FROM t on its own, and reads that summarise or reshape a table.
+  "from",
+  "summarize",
+  "pivot",
+  "unpivot",
 ])
 
 /** The first keyword, past comments and opening parentheses. */

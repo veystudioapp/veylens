@@ -20,7 +20,7 @@ import {
 } from "lucide-react"
 import { useEffect, useState, type ReactNode } from "react"
 
-import { addressOf } from "@shared/address"
+import { locationOf } from "@shared/address"
 import type { Connection, Dashboard, Tone } from "@shared/api"
 
 import { Button } from "@/components/ui/button"
@@ -42,6 +42,7 @@ import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { ACCESS_ICON, ACCESS_LABEL } from "@/lib/access"
 import { useStore } from "@/lib/store"
+import { ENGINE_LABEL } from "@/lib/engines"
 import { quoteName } from "@/lib/sql-complete"
 import { connectionTone, KIND_TONE, toneStyle } from "@/lib/tones"
 import { cn } from "@/lib/utils"
@@ -52,7 +53,6 @@ import { promptText } from "./prompt"
 import { GatewayBar } from "./gateway-switch"
 import { UpdatePill } from "./update-pill"
 
-const ENGINE_LABEL = { postgres: "PostgreSQL", mysql: "MySQL" } as const
 
 /** One choice in a row's right-click menu, or a line between groups of them. */
 type MenuEntry =
@@ -300,7 +300,7 @@ function ConnectionNode({
         icon={<Database />}
         tone={connectionTone(connection)}
         label={connection.name}
-        title={`${ENGINE_LABEL[connection.engine]} · ${connection.user}@${addressOf(connection)}${connection.database ? `/${connection.database}` : ""} · ${ACCESS_LABEL[connection.access]}`}
+        title={`${ENGINE_LABEL[connection.engine]} · ${locationOf(connection)} · ${ACCESS_LABEL[connection.access]}`}
         onClick={() => toggle(key)}
         trailing={
           tree?.status === "loading" ? (

@@ -17,6 +17,13 @@ const api: DesktopApi = {
   deleteConnection: (id) => ipcRenderer.invoke(IPC.deleteConnection, id),
   testConnection: (id, input) =>
     ipcRenderer.invoke(IPC.testConnection, id, input),
+  pickDataFiles: () => ipcRenderer.invoke(IPC.pickDataFiles),
+  googleAccount: () => ipcRenderer.invoke(IPC.googleAccount),
+  importGoogleClient: () => ipcRenderer.invoke(IPC.importGoogleClient),
+  forgetGoogleClient: () => ipcRenderer.invoke(IPC.forgetGoogleClient),
+  signInWithGoogle: () => ipcRenderer.invoke(IPC.signInWithGoogle),
+  cancelGoogleSignIn: () => ipcRenderer.invoke(IPC.cancelGoogleSignIn),
+  signOutOfGoogle: () => ipcRenderer.invoke(IPC.signOutOfGoogle),
 
   getTree: (connectionId) => ipcRenderer.invoke(IPC.getTree, connectionId),
   listObjects: (connectionId) => ipcRenderer.invoke(IPC.listObjects, connectionId),

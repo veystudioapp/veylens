@@ -400,7 +400,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
   const reading = [
       tool(
         "list_connections",
-        "List the database connections the user has set up: id, name, engine (postgres or mysql) and default database.",
+        "List the connections the user has set up: id, name, engine (postgres, mysql, or duckdb for files and Google Sheets) and default database or files.",
         {},
         async () => {
           const all = host.connections.list()
@@ -413,7 +413,9 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
             all
               .map(
                 (item) =>
-                  `- ${item.name} (id ${item.id}): ${item.engine}, database "${item.database}" on ${addressOf(item)}${ACCESS_NOTE[item.access]}`
+                  item.engine === "duckdb"
+                    ? `- ${item.name} (id ${item.id}): duckdb, files: ${item.sources.map((source) => (source.kind === "file" ? source.path : `Google Sheet ${source.url}`)).join(", ")}${ACCESS_NOTE[item.access]}`
+                    : `- ${item.name} (id ${item.id}): ${item.engine}, database "${item.database}" on ${addressOf(item)}${ACCESS_NOTE[item.access]}`
               )
               .join("\n")
           )
@@ -508,8 +510,11 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
                   const keys = info.foreignKeys.length
                     ? ["  foreign keys:", ...info.foreignKeys.map((key) => `    ${key}`)]
                     : []
+                  // A files connection's table says which file and sheet it is.
+                  const origin =
+                    target.engine === "duckdb" ? (await driver.details(ref).catch(() => null))?.comment : null
                   return [
-                    `${ref.schema}.${ref.table} (${info.kind})`,
+                    `${ref.schema}.${ref.table} (${info.kind})${origin ? ` — ${origin}` : ""}`,
                     ...columns,
                     ...keys,
                   ].join("\n")
@@ -774,7 +779,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
 
       tool(
         "add_dashboard_filter",
-        "Add a filter to a dashboard — a control above its tiles that scopes all of them. Kinds, named e.g. \"date\", \"country\", \"q\", \"amount\", \"vip\":\n- date_range gives {{date_start}} (inclusive) and {{date_end}} (exclusive): [[AND ordered_at >= {{date_start}}]] [[AND ordered_at < {{date_end}}]].\n- select gives one value: [[AND country = {{country}}]]; choices from options_sql.\n- multi_select gives several, bound one by one: [[AND status IN ({{status}})]]; choices from options_sql.\n- text gives a LIKE pattern of what is typed (match: contains, starts or exact): [[AND name ILIKE {{q}}]] on Postgres, [[AND name LIKE {{q}}]] on MySQL.\n- number_range gives {{amount_min}} and {{amount_max}}, both included, either open: [[AND total >= {{amount_min}}]] [[AND total <= {{amount_max}}]].\n- toggle gives 1 for Yes and 0 for No: [[AND vip = {{vip}}]].\nAdd filters before the tiles that use them, and write every tile's SQL so it still runs with the filter on All, by wrapping the clause in [[ … ]]. A filter of the same name is replaced.",
+        "Add a filter to a dashboard — a control above its tiles that scopes all of them. Kinds, named e.g. \"date\", \"country\", \"q\", \"amount\", \"vip\":\n- date_range gives {{date_start}} (inclusive) and {{date_end}} (exclusive): [[AND ordered_at >= {{date_start}}]] [[AND ordered_at < {{date_end}}]].\n- select gives one value: [[AND country = {{country}}]]; choices from options_sql.\n- multi_select gives several, bound one by one: [[AND status IN ({{status}})]]; choices from options_sql.\n- text gives a LIKE pattern of what is typed (match: contains, starts or exact): [[AND name ILIKE {{q}}]] on Postgres, [[AND name LIKE {{q}}]] on MySQL, [[AND name ILIKE {{q}} ESCAPE '\\']] on DuckDB.\n- number_range gives {{amount_min}} and {{amount_max}}, both included, either open: [[AND total >= {{amount_min}}]] [[AND total <= {{amount_max}}]].\n- toggle gives 1 for Yes and 0 for No: [[AND vip = {{vip}}]].\nAdd filters before the tiles that use them, and write every tile's SQL so it still runs with the filter on All, by wrapping the clause in [[ … ]]. A filter of the same name is replaced.",
         {
           connection,
           dashboard: z.string().describe("The dashboard's id or title."),

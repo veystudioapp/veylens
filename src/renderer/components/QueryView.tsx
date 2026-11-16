@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/resizable"
 import { Spinner } from "@/components/ui/spinner"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { ENGINE_LABEL } from "@/lib/engines"
 import { errorMessage, useStore, type Tab } from "@/lib/store"
 import { connectionTone, IconTile, KIND_TONE } from "@/lib/tones"
 import { cn } from "@/lib/utils"
@@ -518,7 +519,7 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
         )}
         <span
           className="ml-1 flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs"
-          title={connection ? `${connection.engine === "postgres" ? "PostgreSQL" : "MySQL"} · ${connection.name}` : undefined}
+          title={connection ? `${ENGINE_LABEL[connection.engine]} · ${connection.name}` : undefined}
         >
           <IconTile tone={tone} size="xs">
             <Database />

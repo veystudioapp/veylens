@@ -1,9 +1,16 @@
+import { readFileSync } from "node:fs"
 import path from "node:path"
 
-import { ipcMain, type IpcMainInvokeEvent } from "electron"
+import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "electron"
 
-import { addressOf } from "../shared/address"
-import { IPC, type AuditStatus, type DesktopApi, type UpdateProgress } from "../shared/api"
+import { locationOf } from "../shared/address"
+import {
+  DATA_FILE_EXTENSIONS,
+  IPC,
+  type AuditStatus,
+  type DesktopApi,
+  type UpdateProgress,
+} from "../shared/api"
 import { toolInfo } from "../shared/agent"
 import { describePermissions } from "../shared/permissions"
 import { errorOffset, withErrorOffset } from "../shared/sql-errors"
@@ -14,6 +21,7 @@ import { describeChanges, refusal, type AuditLog } from "./audit"
 import type { Chats } from "./chats"
 import type { Connections } from "./connections"
 import type { Gateway } from "./gateway"
+import type { GoogleAccount } from "./google-account"
 import type { Library } from "./library"
 import { bare, explained } from "./db/types"
 import { installMacUpdate } from "./electron-updates"
@@ -64,6 +72,7 @@ export function registerIpc({
   assist,
   audit,
   gateway,
+  google,
   updates,
 }: {
   connections: Connections
@@ -72,6 +81,7 @@ export function registerIpc({
   assist: Assist
   audit: AuditLog
   gateway: Gateway
+  google: GoogleAccount
   updates: UpdateHost
 }): void {
   const nameOf = (connectionId: string) =>
@@ -133,6 +143,11 @@ export function registerIpc({
             ? (["cloud SQL"] as never[])
             : []
         )
+        .concat(
+          before && JSON.stringify(before.sources) !== JSON.stringify(saved.sources)
+            ? (["sources"] as never[])
+            : []
+        )
         .concat(input.password !== undefined && before ? (["password"] as never[]) : [])
       if (!before || fields.length) {
         audit.record({
@@ -141,7 +156,7 @@ export function registerIpc({
           status: "ok",
           summary: before
             ? `Edited connection ${saved.name}: ${fields.join(", ")}`
-            : `Added connection ${saved.name} (${saved.engine}, ${addressOf(saved)}/${saved.database})`,
+            : `Added connection ${saved.name} (${saved.engine}, ${locationOf(saved)})`,
           ...(before && fields.includes("access")
             ? { detail: `access: ${before.access} → ${saved.access}` }
             : {}),
@@ -161,6 +176,51 @@ export function registerIpc({
       })
     },
     testConnection: (id, input) => connections.test(id, input),
+    pickDataFiles: async () => {
+      const options: Electron.OpenDialogOptions = {
+        title: "Add files",
+        buttonLabel: "Add",
+        properties: ["openFile", "multiSelections"],
+        filters: [
+          { name: "Spreadsheets and data files", extensions: Object.values(DATA_FILE_EXTENSIONS).flat() },
+          { name: "Excel", extensions: [...DATA_FILE_EXTENSIONS.workbook] },
+          { name: "CSV", extensions: [...DATA_FILE_EXTENSIONS.csv] },
+          { name: "Parquet", extensions: [...DATA_FILE_EXTENSIONS.parquet] },
+          { name: "JSON", extensions: [...DATA_FILE_EXTENSIONS.json] },
+        ],
+      }
+      const window = BrowserWindow.getFocusedWindow()
+      const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options)
+      return picked.canceled ? [] : picked.filePaths
+    },
+    googleAccount: async () => google.state(),
+    importGoogleClient: async () => {
+      const options: Electron.OpenDialogOptions = {
+        title: "Import the OAuth client",
+        buttonLabel: "Import",
+        properties: ["openFile"],
+        filters: [{ name: "OAuth client (client_secret_….json)", extensions: ["json"] }],
+      }
+      const window = BrowserWindow.getFocusedWindow()
+      const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options)
+      if (picked.canceled || !picked.filePaths[0]) return google.state()
+      const state = google.importClient(readFileSync(picked.filePaths[0], "utf8"))
+      audit.record({ ...mine(null), action: "connection", status: "ok", summary: "Imported a Google OAuth client for signing in" })
+      return state
+    },
+    forgetGoogleClient: async () => google.forgetClient(),
+    signInWithGoogle: async () => {
+      const state = await google.signIn()
+      audit.record({ ...mine(null), action: "connection", status: "ok", summary: `Signed in to Google as ${state.email}` })
+      return state
+    },
+    cancelGoogleSignIn: async () => google.cancelSignIn(),
+    signOutOfGoogle: async () => {
+      const email = google.state().email
+      const state = await google.signOut()
+      if (email) audit.record({ ...mine(null), action: "connection", status: "ok", summary: `Signed out of Google (${email})` })
+      return state
+    },
 
     getTree: (connectionId) => connections.driver(connectionId).tree(),
     listObjects: (connectionId) => connections.driver(connectionId).allObjects(),

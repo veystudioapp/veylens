@@ -7,7 +7,9 @@ import { Assist } from "./assist"
 import { AuditLog } from "./audit"
 import { Chats } from "./chats"
 import { Connections, type Secrets } from "./connections"
+import { useSignedInAccount } from "./db/files/google-sheets"
 import { Gateway } from "./gateway"
+import { GoogleAccount } from "./google-account"
 import { registerIpc } from "./ipc"
 import { Library } from "./library"
 
@@ -102,6 +104,23 @@ void app.whenReady().then(() => {
   const audit = new AuditLog(dataDir, broadcast)
   const chats = new Chats(dataDir, connections, library, broadcast, audit)
   const assist = new Assist(dataDir, connections, library)
+  // The OAuth client "Sign in with Google" goes through, when this build was
+  // made with one (scripts/build-electron.mjs); otherwise one is imported.
+  const builtInClient =
+    process.env.VEYLENS_GOOGLE_CLIENT_ID && process.env.VEYLENS_GOOGLE_CLIENT_SECRET
+      ? {
+          clientId: process.env.VEYLENS_GOOGLE_CLIENT_ID,
+          clientSecret: process.env.VEYLENS_GOOGLE_CLIENT_SECRET,
+        }
+      : null
+  const google = new GoogleAccount(
+    path.join(dataDir, "google-account.json"),
+    secrets,
+    builtInClient,
+    (url) => shell.openExternal(url),
+    () => connections.reopenFiles()
+  )
+  useSignedInAccount(() => google.requestClient())
   const gateway = new Gateway(path.join(dataDir, "gateway.json"), connections, (state) => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send(IPC.gatewayState, state)
@@ -114,6 +133,7 @@ void app.whenReady().then(() => {
     assist,
     audit,
     gateway,
+    google,
     updates: {
       version: app.getVersion(),
       packaged: app.isPackaged,

@@ -4,10 +4,10 @@
 
 <h1 align="center">Vey Lens</h1>
 
-A desktop database explorer you can talk to. Connect to PostgreSQL or MySQL,
-browse and edit tables like in any database client, and ask questions about
-your data in plain language — Claude reads the schema, runs the SQL, and
-shows what it found.
+A desktop database explorer you can talk to. Connect to PostgreSQL or MySQL
+— or open Excel, CSV and Google Sheets as tables — browse and edit them like
+in any database client, and ask questions about your data in plain language:
+Claude reads the schema, runs the SQL, and shows what it found.
 
 Electron + React, built the same way as [Vey](../vey): esbuild for the main
 process, Vite for the renderer, one typed IPC contract between them, and
@@ -43,6 +43,22 @@ bun run package    # electron-builder → release/
 
 - **Explorer** — saved connections, schemas, tables and views, search; each
   connection can be given a colour (e.g. red for production).
+- **Files & Google Sheets** — a *Files* connection reads Excel (.xlsx, .xls),
+  CSV, Parquet, JSON and Google Sheets into an in-process DuckDB: a workbook
+  is a schema with a table per sheet, other files are tables in `main`. The
+  header is found under a title, merged cells are filled, columns are typed
+  from the cells, Shift_JIS CSV is read as such. Files are re-read when they
+  change, sheets every five minutes. Read-only, and DuckDB can reach no file
+  but the ones given. A Google Sheet is read by its "anyone with the link"
+  export, or — for one shared with you — through the Sheets API as the
+  account signed in with **Sign in with Google** (read-only Sheets scope,
+  refresh token in the keychain), else this machine's gcloud Application
+  Default Credentials. Signing in needs a Google OAuth client of type
+  *Desktop app* (an *Internal* one in a Workspace needs no Google review):
+  built in with `VEYLENS_GOOGLE_CLIENT_ID` / `VEYLENS_GOOGLE_CLIENT_SECRET`
+  set when building (release.yml reads them from repository secrets), or
+  imported in the app from its `client_secret_….json`. Enable the Google
+  Sheets API in the client's project.
 - **Viewer** — table tabs with paging, sorting, filtering and inline
   editing (⌘S saves everything in one transaction); SQL tabs run arbitrary
   queries (⌘↵).
@@ -83,7 +99,8 @@ src/main/
   main.ts              window, wiring
   ipc.ts               one handler per contract method
   connections.ts       saved connections (passwords via the OS keychain)
-  db/                  Driver interface; postgres.ts, mysql.ts, sql.ts
+  db/                  Driver interface; postgres.ts, mysql.ts, sql.ts;
+                       files/ — Excel, CSV, Sheets in DuckDB
   chats.ts             conversations and the `claude` session behind each
   agent-tools.ts       the tools the agent is given
   assist.ts            SQL assist: one-shot Generate / Explain / Fix

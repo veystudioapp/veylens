@@ -1,21 +1,25 @@
 import { randomUUID } from "node:crypto"
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
 import {
   ACCESS_MODES,
   CLOUD_SQL_AUTHS,
   CLOUD_SQL_IP_TYPES,
+  SHEET_ACCESS,
   TONES,
   type AccessMode,
   type CloudSql,
   type Connection,
   type ConnectionInput,
+  type DataSource,
   type Engine,
   type Permissions,
 } from "../shared/api"
 import { checkPermissions, forAssistant } from "../shared/permissions"
 import { createDriver, type ConnectionConfig, type Driver } from "./db"
+import { fileKind } from "./db/files/driver"
+import { spreadsheetId } from "./db/files/google-sheets"
 import { GuardedDriver, ViewSourceCache, type Policy } from "./db/guarded"
 
 /**
@@ -30,15 +34,17 @@ export type Secrets = {
 
 type StoredPassword = { enc: string } | { plain: string } | null
 
-type Stored = Omit<Connection, "hasPassword" | "permissions" | "cloudSql"> & {
+type Stored = Omit<Connection, "hasPassword" | "permissions" | "cloudSql" | "sources"> & {
   password: StoredPassword
+  /** Saved before files connections: none. */
+  sources?: DataSource[]
   /** Saved before there were permissions: none, the defaults. */
   permissions?: Permissions
   /** Saved before Cloud SQL: none. */
   cloudSql?: CloudSql | null
 }
 
-const ENGINES: Engine[] = ["postgres", "mysql"]
+const ENGINES: Engine[] = ["postgres", "mysql", "duckdb"]
 
 /** `project:region:instance`; a domain-scoped project adds `example.com:`. */
 const INSTANCE_NAME = /^[^:\s]+(:[^:\s]+){2,3}$/
@@ -68,9 +74,47 @@ function cloudSqlOf(input: ConnectionInput, existing: Stored | null): CloudSql |
     : checkCloudSql(input.cloudSql)
 }
 
-function validate(input: ConnectionInput, cloudSql: CloudSql | null): void {
+/** A files connection's sources as given, checked; none for a server. */
+function checkSources(engine: Engine, sources: DataSource[] | undefined): DataSource[] {
+  if (engine !== "duckdb") return []
+  const checked: DataSource[] = []
+  for (const source of sources ?? []) {
+    if (source?.kind === "file") {
+      const file = String(source.path ?? "").trim()
+      if (!path.isAbsolute(file)) throw new Error(`Not a full path to a file: ${file}`)
+      if (!fileKind(file)) {
+        throw new Error(
+          `${path.basename(file)} is not a file this can read: Excel (.xlsx, .xls…), CSV, Parquet or JSON.`
+        )
+      }
+      if (!checked.some((other) => other.kind === "file" && other.path === file)) {
+        checked.push({ kind: "file", path: file })
+      }
+    } else if (source?.kind === "google_sheet") {
+      const url = String(source.url ?? "").trim()
+      if (!spreadsheetId(url)) throw new Error(`Not a link to a Google Sheet: ${url}`)
+      checked.push({
+        kind: "google_sheet",
+        url,
+        access: SHEET_ACCESS.includes(source.access) ? source.access : "link",
+      })
+    }
+  }
+  return checked
+}
+
+/** The sources a save or test is for: those given, or the stored ones. */
+function sourcesOf(input: ConnectionInput, existing: Stored | null): DataSource[] {
+  return checkSources(input.engine, input.sources === undefined ? existing?.sources : input.sources)
+}
+
+function validate(input: ConnectionInput, cloudSql: CloudSql | null, sources: DataSource[]): void {
   if (!ENGINES.includes(input.engine)) throw new Error("Pick an engine.")
   if (!input.name.trim()) throw new Error("Give the connection a name.")
+  if (input.engine === "duckdb") {
+    if (sources.length === 0) throw new Error("Add a file or a Google Sheet to read.")
+    return
+  }
   // Cloud SQL's connector finds the address itself.
   if (cloudSql) return
   if (!input.host.trim()) throw new Error("A host is required.")
@@ -87,6 +131,9 @@ function validate(input: ConnectionInput, cloudSql: CloudSql | null): void {
  */
 export class Connections {
   private stored: Stored[] = []
+  /** Where files connections keep the copies they make; emptied on start,
+   * as nothing in it outlives the driver that made it. */
+  private readonly cacheRoot: string
   /** Per connection: one server driver, and the user's and the assistant's
    * guards in front of it. */
   private readonly drivers = new Map<
@@ -100,6 +147,8 @@ export class Connections {
     /** Swapped by a test for drivers that need no network. */
     private readonly create: (config: ConnectionConfig) => Driver = createDriver
   ) {
+    this.cacheRoot = path.join(path.dirname(file), "file-cache")
+    rmSync(this.cacheRoot, { recursive: true, force: true })
     try {
       const parsed: unknown = JSON.parse(readFileSync(file, "utf8"))
       if (Array.isArray(parsed)) this.stored = parsed as Stored[]
@@ -144,6 +193,7 @@ export class Connections {
       // Saved before connections had colours.
       color: rest.color ?? null,
       cloudSql: rest.cloudSql ?? null,
+      sources: rest.sources ?? [],
       permissions: checkPermissions(rest.permissions),
       hasPassword: password !== null,
     }
@@ -165,8 +215,10 @@ export class Connections {
 
   save(id: string | null, input: ConnectionInput): Connection {
     const existing = id ? this.find(id) : null
-    const cloudSql = cloudSqlOf(input, existing)
-    validate(input, cloudSql)
+    const files = input.engine === "duckdb"
+    const cloudSql = files ? null : cloudSqlOf(input, existing)
+    const sources = sourcesOf(input, existing)
+    validate(input, cloudSql, sources)
     const next: Stored = {
       id: existing?.id ?? randomUUID(),
       name: input.name.trim(),
@@ -177,9 +229,13 @@ export class Connections {
       database: input.database.trim(),
       ssl: input.ssl,
       cloudSql,
-      access: ACCESS_MODES.includes(input.access as AccessMode)
-        ? input.access!
-        : (existing?.access ?? "read_only"),
+      ...(files ? { sources } : {}),
+      // Files are read, never written: their tables are reloaded from them.
+      access: files
+        ? "read_only"
+        : ACCESS_MODES.includes(input.access as AccessMode)
+          ? input.access!
+          : (existing?.access ?? "read_only"),
       color:
         input.color === undefined
           ? (existing?.color ?? null)
@@ -227,6 +283,8 @@ export class Connections {
       ssl: stored.ssl,
       cloudSql: stored.cloudSql ?? null,
       access: stored.access ?? "read_write",
+      sources: stored.sources ?? [],
+      cacheRoot: this.cacheRoot,
     }
   }
 
@@ -254,10 +312,12 @@ export class Connections {
   /** Tries the settings in a dialog without saving them. */
   async test(id: string | null, input: ConnectionInput): Promise<string> {
     const existing = id ? this.find(id) : null
-    const cloudSql = cloudSqlOf(input, existing)
-    validate(input, cloudSql)
+    const files = input.engine === "duckdb"
+    const cloudSql = files ? null : cloudSqlOf(input, existing)
+    const sources = sourcesOf(input, existing)
+    validate(input, cloudSql, sources)
     const password = input.password ?? (existing ? this.open(existing.password) : "")
-    const driver = this.create({ ...input, password, cloudSql })
+    const driver = this.create({ ...input, password, cloudSql, sources, cacheRoot: this.cacheRoot })
     try {
       return await driver.ping()
     } finally {
@@ -306,6 +366,12 @@ export class Connections {
    * only for it is described, and its rows refused. */
   assistantDriver(id: string): GuardedDriver {
     return this.guards(id).assistant
+  }
+
+  /** Drops the open files connections, so the next use reads them again:
+   * after the Google account they read sheets as has changed. */
+  reopenFiles(): void {
+    for (const stored of this.stored) if (stored.engine === "duckdb") this.drop(stored.id)
   }
 
   async closeAll(): Promise<void> {
