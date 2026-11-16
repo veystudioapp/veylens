@@ -132,7 +132,7 @@ export type ConnectionInput = Omit<
   cloudSql?: CloudSql | null
   /** `undefined` keeps the stored password; a string (even empty) replaces it. */
   password?: string
-  /** Read & write when not said. */
+  /** Read-only for new connections, kept as-is when editing, if not said. */
   access?: AccessMode
 }
 

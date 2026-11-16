@@ -193,7 +193,7 @@ export function ConnectionDialog({
   const access =
     useStore(
       (state) => state.connections.find((item) => item.id === existing?.id)?.access
-    ) ?? "read_write"
+    ) ?? "read_only"
 
   const [engine, setEngine] = useState<Engine>(existing?.engine ?? "postgres")
   const [name, setName] = useState(existing?.name ?? "")

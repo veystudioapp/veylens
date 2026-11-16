@@ -174,7 +174,7 @@ export class Connections {
       cloudSql,
       access: ACCESS_MODES.includes(input.access as AccessMode)
         ? input.access!
-        : (existing?.access ?? "read_write"),
+        : (existing?.access ?? "read_only"),
       color:
         input.color === undefined
           ? (existing?.color ?? null)
