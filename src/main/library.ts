@@ -732,7 +732,10 @@ function checkTile(tile: DashboardTile): DashboardTile {
       tile.height === "s" || tile.height === "m" || tile.height === "l"
         ? tile.height
         : // Unsaid: short for words and figures, which size to their content.
-          text || tile.chart?.type === "kpi" || tile.chart?.type === "stat"
+          text ||
+            tile.chart?.type === "kpi" ||
+            tile.chart?.type === "stat" ||
+            (tile.chart?.type === "progress" && !tile.chart.x)
           ? "s"
           : "m",
   }

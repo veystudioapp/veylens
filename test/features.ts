@@ -11,7 +11,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 import { tileText, type ChatEvent, type ChatItem as ChatItemT, type ViewerTarget } from "../src/shared/api"
-import { chartProblem, inferChart, isNumeric, widen } from "../src/shared/chart"
+import { bridge, chartProblem, inferChart, isNumeric, widen } from "../src/shared/chart"
 import {
   bindParameters,
   dateRange,
@@ -544,6 +544,37 @@ await check("chart: KPI, pivot, table and stacking are checked", () => {
   assert.equal(chartProblem({ type: "table", x: null, y: [] }, byStatus), null)
   assert.match(chartProblem({ type: "line", x: "status", y: ["orders"], stacked: true }, byStatus)!, /cannot be stacked/)
   assert.match(chartProblem({ type: "bar", x: "month", y: ["orders", "ids"], series: "month" }, monthly)!, /one value/)
+})
+
+await check("chart: progress, scatter, funnel and waterfall are checked", () => {
+  const goal = { columns: [txt("region"), num("sales"), num("goal")], rows: [["north", "80", "100"], ["south", "120", "100"]] }
+  const first = { ...goal, rows: goal.rows.slice(0, 1) }
+  assert.equal(chartProblem({ type: "progress", x: "region", y: ["sales"], target: "goal" }, goal), null)
+  assert.equal(chartProblem({ type: "progress", x: null, y: ["sales"], target: "goal" }, first), null)
+  assert.match(chartProblem({ type: "progress", x: null, y: ["sales"] }, first)!, /needs target/)
+  assert.match(chartProblem({ type: "progress", x: null, y: ["sales"], target: "goal" }, goal)!, /reads one row/)
+  assert.match(chartProblem({ type: "progress", x: null, y: ["sales"], target: "region" }, first)!, /not numeric/)
+  assert.match(chartProblem({ type: "progress", x: null, y: ["sales"], target: "gaol" }, first)!, /No column named "gaol"/)
+
+  assert.equal(chartProblem({ type: "scatter", x: "goal", y: ["sales"], series: "region" }, goal), null)
+  assert.match(chartProblem({ type: "scatter", x: "region", y: ["sales"] }, goal)!, /not numeric/)
+  assert.match(chartProblem({ type: "scatter", x: "goal", y: ["sales", "goal"] }, goal)!, /one measure/)
+
+  assert.equal(chartProblem({ type: "funnel", x: "region", y: ["sales"] }, goal), null)
+  assert.match(chartProblem({ type: "funnel", x: null, y: ["sales"] }, goal)!, /needs x/)
+  assert.match(chartProblem({ type: "waterfall", x: "region", y: ["sales", "goal"] }, goal)!, /one value/)
+})
+
+await check("chart: a waterfall starts, moves, and ends at its total", () => {
+  assert.deepEqual(bridge([100, 30, -50, null, 5]), [
+    { from: 0, to: 100, kind: "start" },
+    { from: 100, to: 130, kind: "up" },
+    { from: 130, to: 80, kind: "down" },
+    { from: 80, to: 80, kind: "up" },
+    { from: 80, to: 85, kind: "up" },
+    { from: 0, to: 85, kind: "total" },
+  ])
+  assert.deepEqual(bridge([]), [])
 })
 
 // ── Dashboard tools ────────────────────────────────────────────────────────

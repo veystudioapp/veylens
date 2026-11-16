@@ -204,12 +204,12 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
     type: z
       .enum(CHART_TYPES)
       .describe(
-        "bar: columns per category or period. hbar: ranked horizontal bars — use it for part-to-whole or many/long categories (there is no pie). line: change over time. area: one series over time. stat: the single number a one-row result is. kpi: a headline figure with its change — either one row with the value and the previous period's value (compare), or rows per period (x) whose last row is now, drawn with a sparkline. pivot: a matrix of y[0] with x as rows and series as columns, shaded by size. table: the rows, with the y columns shaded by size."
+        "bar: columns per category or period. hbar: ranked horizontal bars — use it for part-to-whole or many/long categories (there is no pie). line: change over time. area: one series over time. stat: the single number a one-row result is. kpi: a headline figure with its change — either one row with the value and the previous period's value (compare), or rows per period (x) whose last row is now, drawn with a sparkline. pivot: a matrix of y[0] with x as rows and series as columns, shaded by size. table: the rows, with the y columns shaded by size. scatter: one measure (y[0]) against another (x, numeric), a dot per row, optionally coloured by series — for how two measures relate. funnel: ordered steps (x, one row per step, in order) with y[0] the count reaching each — for conversion. waterfall: a bridge — the first row is the starting figure, each row after it a signed change (x names it), and the end total is drawn after them; do not include the total row yourself. progress: y[0] against its target column (target) — one row for a headline, or a row per category (x) each against its own target."
       ),
     x: z
       .string()
       .optional()
-      .describe("The category or time column (a pivot's rows; a kpi's period). Omit for stat, table and a one-row kpi."),
+      .describe("The category or time column (a pivot's rows; a kpi's period; a funnel's or waterfall's steps; a scatter's horizontal measure). Omit for stat, table, a one-row kpi and a one-row progress."),
     y: z
       .array(z.string())
       .max(MAX_SERIES)
@@ -219,7 +219,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
     series: z
       .string()
       .optional()
-      .describe("For a result in long form (GROUP BY month, channel): the column whose values become the series — one line or bar per channel. A pivot's columns."),
+      .describe("For a result in long form (GROUP BY month, channel): the column whose values become the series — one line or bar per channel. A pivot's columns. The column colouring a scatter's dots."),
     stacked: z
       .boolean()
       .optional()
@@ -228,10 +228,14 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
       .string()
       .optional()
       .describe("kpi with one row: the column with the previous period's value."),
+    target: z
+      .string()
+      .optional()
+      .describe("progress: the column holding the goal y[0] is measured against (a fixed goal is a literal in the SQL: 50000 AS target)."),
     up_is_good: z
       .boolean()
       .optional()
-      .describe("kpi: false when a rise is bad news (costs, churn, refunds)."),
+      .describe("kpi, progress, waterfall: false when a rise is bad news (costs, churn, refunds) — a progress then reads as a budget, a waterfall colours rises as bad."),
   }
 
   type ChartArgs = {
@@ -241,6 +245,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
     series?: string
     stacked?: boolean
     compare?: string
+    target?: string
     up_is_good?: boolean
   }
 
@@ -251,6 +256,7 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
     ...(args.series ? { series: args.series } : {}),
     ...(args.stacked ? { stacked: true } : {}),
     ...(args.compare ? { compare: args.compare } : {}),
+    ...(args.target ? { target: args.target } : {}),
     ...(args.up_is_good === false ? { upIsGood: false } : {}),
   })
 

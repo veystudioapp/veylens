@@ -173,10 +173,19 @@ function RefreshControl({
 }
 
 /** Types whose categories can be clicked to filter the rest. */
-const SELECTABLE = new Set(["bar", "hbar", "line", "area", "pivot"])
+const SELECTABLE = new Set([
+  "bar",
+  "hbar",
+  "line",
+  "area",
+  "pivot",
+  "funnel",
+  "waterfall",
+  "progress",
+])
 /** Charts drawn as a picture, which is what a PNG can be made of: figures and
  * tables are text, and are exported as CSV. */
-const PICTURED = new Set(["bar", "hbar", "line", "area"])
+const PICTURED = new Set(["bar", "hbar", "line", "area", "scatter", "funnel", "waterfall"])
 
 /** The grid's columns at this width: 4, then 2, then 1. */
 function useColumns() {
@@ -323,7 +332,10 @@ function TileCard({
   const width = Math.min(tile.width ?? 2, columns)
   const height = tile.height ?? "m"
   const selectable = !!spec && !table && SELECTABLE.has(spec.type) && !!spec.x
-  const figureOnly = !!spec && !table && (spec.type === "kpi" || spec.type === "stat")
+  const figureOnly =
+    !!spec &&
+    !table &&
+    (spec.type === "kpi" || spec.type === "stat" || (spec.type === "progress" && !spec.x))
   const plotted = !text && !figureOnly
   // Rows scroll inside a tile of its height, rather than stretch the grid.
   const rows = !text && (!spec || table || spec.type === "table")

@@ -8,8 +8,8 @@ import {
   type ReactNode,
 } from "react"
 
-import type { Cell, ChartSpec, QueryResult } from "@shared/api"
-import { toNumber, widen } from "@shared/chart"
+import { MAX_SERIES, type Cell, type ChartSpec, type QueryResult } from "@shared/api"
+import { bridge, isNumeric, toNumber, widen } from "@shared/chart"
 
 import { groupDigits } from "@/lib/cell-format"
 import { cn } from "@/lib/utils"
@@ -42,6 +42,17 @@ const compactFormat = new Intl.NumberFormat(undefined, {
 })
 const percentFormat = new Intl.NumberFormat(undefined, {
   style: "percent",
+  maximumFractionDigits: 1,
+  signDisplay: "exceptZero",
+})
+/** A part of something: no sign, as a share is never a change. */
+const shareFormat = new Intl.NumberFormat(undefined, {
+  style: "percent",
+  maximumFractionDigits: 1,
+})
+/** A change written on its bar: compact, and always signed. */
+const changeFormat = new Intl.NumberFormat(undefined, {
+  notation: "compact",
   maximumFractionDigits: 1,
   signDisplay: "exceptZero",
 })
@@ -97,7 +108,8 @@ function prepare(spec: ChartSpec, data: Data): Prepared {
   let raw: Cell[]
   let series: string[]
   let values: (number | null)[][]
-  if (spec.series && spec.x && spec.y[0]) {
+  // A scatter's series colours its dots; its rows stay rows.
+  if (spec.series && spec.x && spec.y[0] && spec.type !== "scatter") {
     const wide = widen(data, spec.x, spec.series, spec.y[0])
     raw = wide.labels
     series = wide.names
@@ -274,7 +286,15 @@ function segmentEnds(
   return [from, to]
 }
 
-function Legend({ names, line }: { names: string[]; line: boolean }) {
+function Legend({
+  names,
+  line,
+  dot = false,
+}: {
+  names: string[]
+  line: boolean
+  dot?: boolean
+}) {
   if (names.length < 2) return null
   return (
     <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
@@ -282,7 +302,13 @@ function Legend({ names, line }: { names: string[]; line: boolean }) {
         <span key={name} className="flex items-center gap-1.5">
           <span
             aria-hidden
-            className={line ? "h-0.5 w-3 rounded-full" : "size-2.5 rounded-[3px]"}
+            className={
+              line
+                ? "h-0.5 w-3 rounded-full"
+                : dot
+                  ? "size-2.5 rounded-full"
+                  : "size-2.5 rounded-[3px]"
+            }
             style={{ background: color(index) }}
           />
           {name}
@@ -299,13 +325,16 @@ function Tooltip({
   flip,
   label,
   rows,
+  notes = [],
   hint,
 }: {
   left: number
   top: number
   flip: boolean
   label: string
-  rows: { name: string; value: number | null; index: number }[]
+  rows: { name: string; value: number | null; index: number; color?: string }[]
+  /** Lines under the values: what they come to, what they are a share of. */
+  notes?: string[]
   hint?: string
 }) {
   return (
@@ -324,7 +353,7 @@ function Tooltip({
           <span
             aria-hidden
             className="h-0.5 w-3 shrink-0 rounded-full"
-            style={{ background: color(row.index) }}
+            style={{ background: row.color ?? color(row.index) }}
           />
           <span className="font-semibold text-popover-foreground tabular-nums">
             {row.value === null ? "—" : formatNumber(row.value)}
@@ -332,6 +361,11 @@ function Tooltip({
           {rows.length > 1 && (
             <span className="text-muted-foreground">{row.name}</span>
           )}
+        </div>
+      ))}
+      {notes.map((note) => (
+        <div key={note} className="whitespace-nowrap text-muted-foreground tabular-nums">
+          {note}
         </div>
       ))}
       {hint && <div className="mt-1 text-muted-foreground">{hint}</div>}
@@ -1122,6 +1156,781 @@ function Pivot({
   )
 }
 
+/** Labels for a row's categories: as many characters as a third of the width
+ * allows, the rest cut with an ellipsis. */
+function rowLabels(labels: string[], width: number) {
+  const chars = Math.min(
+    Math.max(...labels.map((label) => label.length), 1),
+    Math.floor((width * 0.35) / CHAR)
+  )
+  const clip = (label: string) =>
+    label.length > chars ? `${label.slice(0, Math.max(1, chars - 1))}…` : label
+  return { chars, clip }
+}
+
+const dimmed = (index: number, active: number | null, selectedIndex: number) =>
+  selectedIndex >= 0
+    ? index === selectedIndex
+      ? 1
+      : 0.3
+    : active === null || active === index
+      ? 1
+      : 0.55
+
+// ── Funnel ─────────────────────────────────────────────────────────────────
+
+/**
+ * Steps in the order the rows give them, each a bar of how many are left,
+ * over a faint one of how many reached the step before: the drop is the
+ * difference. Each says its count and its share of the first step.
+ */
+function Funnel({
+  spec,
+  prepared,
+  limit,
+  onSelect,
+  selected,
+}: {
+  spec: ChartSpec
+  prepared: Prepared
+  limit: number
+} & Selection) {
+  const [ref, width] = useWidth(520)
+  const shown = Math.min(prepared.labels.length, limit)
+  const labels = prepared.labels.slice(0, shown)
+  const raw = prepared.raw.slice(0, shown)
+  const values = (prepared.values[0] ?? []).slice(0, shown)
+  const pick = onSelect ? (index: number) => onSelect(raw[index] ?? null) : undefined
+  const { active, setActive, onKeyDown } = useActive(shown, pick)
+  const selectedIndex =
+    selected === undefined ? -1 : raw.findIndex((value) => value === selected)
+
+  const first = values[0] ?? null
+  const high = Math.max(0, ...values.map((value) => value ?? 0))
+  const share = (value: number | null, of: number | null) =>
+    value === null || of === null || of === 0 ? null : value / of
+
+  const row = 30
+  const thickness = 16
+  const { chars, clip } = rowLabels(labels, width)
+  const margin = { top: 4, right: 112, bottom: 4, left: chars * CHAR + 12 }
+  const plotW = Math.max(40, width - margin.left - margin.right)
+  const height = margin.top + row * shown + margin.bottom
+  const x = (value: number) => margin.left + (high ? Math.max(0, value) / high : 0) * plotW
+
+  return (
+    <div ref={ref} className="relative w-full">
+      <svg
+        width={width}
+        height={height}
+        role="img"
+        tabIndex={0}
+        aria-label={`Funnel of ${spec.y[0] ?? ""} by ${spec.x ?? ""}`}
+        onKeyDown={onKeyDown}
+        onBlur={() => setActive(null)}
+        onPointerLeave={() => setActive(null)}
+        className={cn(
+          "block overflow-visible outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          pick && "cursor-pointer"
+        )}
+      >
+        {labels.map((label, index) => {
+          const top = margin.top + row * index
+          const across = top + (row - thickness) / 2
+          const value = values[index] ?? null
+          const before = index > 0 ? (values[index - 1] ?? null) : null
+          const ofFirst = index > 0 ? share(value, first) : null
+          return (
+            <g
+              key={index}
+              onPointerEnter={() => setActive(index)}
+              onClick={pick ? () => pick(index) : undefined}
+              opacity={dimmed(index, active, selectedIndex)}
+            >
+              <rect x={0} y={top} width={width} height={row} fill="transparent" />
+              <text
+                x={margin.left - 8}
+                y={top + row / 2}
+                dy="0.32em"
+                textAnchor="end"
+                fontSize={FONT}
+                className={index === selectedIndex ? "fill-foreground font-semibold" : "fill-foreground"}
+              >
+                {clip(label)}
+              </text>
+              {before !== null && before > 0 && (
+                <path
+                  d={barPath("horizontal", margin.left, x(before), across, thickness)}
+                  fill={color(0)}
+                  fillOpacity={0.14}
+                />
+              )}
+              {value !== null && value > 0 && (
+                <path
+                  d={barPath("horizontal", margin.left, x(value), across, thickness)}
+                  fill={color(0)}
+                />
+              )}
+              <text
+                x={width - 4}
+                y={top + row / 2}
+                dy="0.32em"
+                textAnchor="end"
+                fontSize={FONT}
+                className="tabular-nums"
+              >
+                <tspan className="fill-foreground font-medium">
+                  {value === null ? "—" : figure(value)}
+                </tspan>
+                {ofFirst !== null && (
+                  <tspan className="fill-muted-foreground"> · {shareFormat.format(ofFirst)}</tspan>
+                )}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+
+      {active !== null && (
+        <Tooltip
+          left={Math.min(width - 20, margin.left + plotW / 2)}
+          top={margin.top + row * active + row}
+          flip={false}
+          label={labels[active] ?? ""}
+          rows={[{ name: spec.y[0] ?? "", value: values[active] ?? null, index: 0 }]}
+          notes={
+            active === 0
+              ? []
+              : [
+                  share(values[active] ?? null, values[active - 1] ?? null),
+                  share(values[active] ?? null, first),
+                ].flatMap((part, which) =>
+                  part === null
+                    ? []
+                    : [
+                        `${shareFormat.format(part)} of ${which === 0 ? labels[active - 1] : labels[0]}`,
+                      ]
+                )
+          }
+          hint={pick ? SELECT_HINT : undefined}
+        />
+      )}
+      {prepared.labels.length > shown && (
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          The first {shown} of {prepared.labels.length} steps; the table has them all.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Waterfall ──────────────────────────────────────────────────────────────
+
+/**
+ * Where a figure starts, each change that moves it — a rise and a fall in
+ * the status colours, by whether that direction is good — and where it ends.
+ */
+function Waterfall({
+  spec,
+  prepared,
+  height,
+  onSelect,
+  selected,
+}: {
+  spec: ChartSpec
+  prepared: Prepared
+  height: number
+} & Selection) {
+  const [ref, width] = useWidth(520)
+  const values = prepared.values[0] ?? []
+  const steps = useMemo(() => bridge(values), [values])
+  const labels = [...prepared.labels, "Total"]
+  const count = steps.length
+  const last = count - 1
+  // The total is not a category of the data, so there is nothing to select.
+  const pick = onSelect
+    ? (index: number) => {
+        if (index < last) onSelect(prepared.raw[index] ?? null)
+      }
+    : undefined
+  const { active, setActive, onKeyDown } = useActive(count, pick)
+  const selectedIndex =
+    selected === undefined ? -1 : prepared.raw.findIndex((value) => value === selected)
+
+  const ends = steps.flatMap((step) => [step.from, step.to])
+  const ticks = niceTicks(Math.min(0, ...ends), Math.max(0, ...ends))
+  const yMin = ticks[0]!
+  const yMax = ticks.at(-1)!
+  const format = tickFormat(Math.max(Math.abs(yMin), Math.abs(yMax)))
+  const margin = {
+    top: 16,
+    right: 12,
+    bottom: 22,
+    left: Math.max(...ticks.map((tick) => format(tick).length)) * CHAR + 10,
+  }
+  const plotW = Math.max(40, width - margin.left - margin.right)
+  const plotH = Math.max(40, height - margin.top - margin.bottom)
+  const y = (value: number) =>
+    margin.top + plotH - ((value - yMin) / (yMax - yMin || 1)) * plotH
+  const band = plotW / Math.max(1, count)
+  const xCenter = (index: number) => margin.left + band * (index + 0.5)
+  const thickness = Math.max(1, Math.min(BAR, band * 0.7))
+  const labelChars = Math.floor((band - 4) / CHAR)
+  const upIsGood = spec.upIsGood ?? true
+  const fillOf = (kind: (typeof steps)[number]["kind"]) =>
+    kind === "start" || kind === "total"
+      ? color(0)
+      : (kind === "up") === upIsGood
+        ? "var(--delta-good)"
+        : "var(--delta-bad)"
+  const textOf = (index: number) => {
+    const step = steps[index]!
+    return step.kind === "up" || step.kind === "down"
+      ? changeFormat.format(step.to - step.from)
+      : compactFormat.format(step.to)
+  }
+
+  const indexAt = (clientX: number, element: Element) => {
+    const position = clientX - element.getBoundingClientRect().left - margin.left
+    return Math.max(0, Math.min(last, Math.floor(position / band)))
+  }
+
+  return (
+    <div ref={ref} className="relative w-full">
+      <svg
+        width={width}
+        height={height}
+        role="img"
+        tabIndex={0}
+        aria-label={`Waterfall of ${spec.y[0] ?? ""} by ${spec.x ?? ""}`}
+        onKeyDown={onKeyDown}
+        onBlur={() => setActive(null)}
+        onPointerMove={(event) => setActive(indexAt(event.clientX, event.currentTarget))}
+        onPointerLeave={() => setActive(null)}
+        onClick={pick ? (event) => pick(indexAt(event.clientX, event.currentTarget)) : undefined}
+        className={cn(
+          "block overflow-visible outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          pick && "cursor-pointer"
+        )}
+      >
+        {ticks.map((tick) => (
+          <g key={tick}>
+            <line
+              x1={margin.left}
+              x2={margin.left + plotW}
+              y1={y(tick)}
+              y2={y(tick)}
+              stroke={tick === 0 ? "var(--chart-axis)" : "var(--chart-grid)"}
+              strokeWidth={1}
+              shapeRendering="crispEdges"
+            />
+            <text
+              x={margin.left - 6}
+              y={y(tick)}
+              dy="0.32em"
+              textAnchor="end"
+              fontSize={FONT}
+              className="fill-muted-foreground tabular-nums"
+            >
+              {format(tick)}
+            </text>
+          </g>
+        ))}
+
+        {labelChars >= 2 &&
+          labels.map((label, index) => (
+            <text
+              key={index}
+              x={xCenter(index)}
+              y={margin.top + plotH + 15}
+              textAnchor="middle"
+              fontSize={FONT}
+              className={cn(
+                index === selectedIndex || index === last
+                  ? "fill-foreground font-semibold"
+                  : "fill-muted-foreground"
+              )}
+            >
+              {label.length > labelChars ? `${label.slice(0, labelChars - 1)}…` : label}
+            </text>
+          ))}
+
+        {/* Where each bar leaves the running figure, the next picks it up. */}
+        {steps.slice(0, -1).map((step, index) => (
+          <line
+            key={`link-${index}`}
+            x1={xCenter(index) + thickness / 2}
+            x2={xCenter(index + 1) - thickness / 2}
+            y1={y(step.to)}
+            y2={y(step.to)}
+            stroke="var(--chart-axis)"
+            strokeWidth={1}
+            strokeDasharray="2 2"
+            shapeRendering="crispEdges"
+          />
+        ))}
+
+        {steps.map((step, index) => {
+          const opacity = index === last ? (active === null || active === last ? 1 : 0.55) : dimmed(index, active, selectedIndex)
+          const top = Math.max(step.from, step.to)
+          const bottom = Math.min(step.from, step.to)
+          const text = textOf(index)
+          const fits = text.length * CHAR <= band - 2
+          const below = step.kind === "down" || (step.kind !== "up" && step.to < 0)
+          return (
+            <g key={index} opacity={opacity}>
+              {step.to !== step.from && (
+                <path
+                  d={barPath("vertical", y(step.from), y(step.to), xCenter(index) - thickness / 2, thickness)}
+                  fill={fillOf(step.kind)}
+                />
+              )}
+              {fits && count <= 16 && (
+                <text
+                  x={xCenter(index)}
+                  y={below ? y(bottom) + 12 : y(top) - 5}
+                  textAnchor="middle"
+                  fontSize={FONT}
+                  className="fill-foreground font-medium tabular-nums"
+                >
+                  {text}
+                </text>
+              )}
+            </g>
+          )
+        })}
+      </svg>
+
+      {active !== null && (
+        <Tooltip
+          left={xCenter(active)}
+          top={margin.top}
+          flip={xCenter(active) > width * 0.6}
+          label={labels[active] ?? ""}
+          rows={[
+            {
+              name: spec.y[0] ?? "",
+              value:
+                steps[active]!.kind === "up" || steps[active]!.kind === "down"
+                  ? steps[active]!.to - steps[active]!.from
+                  : steps[active]!.to,
+              index: 0,
+              color: fillOf(steps[active]!.kind),
+            },
+          ]}
+          notes={
+            steps[active]!.kind === "up" || steps[active]!.kind === "down"
+              ? [`${formatNumber(steps[active]!.to)} after`]
+              : []
+          }
+          hint={pick && active < last ? SELECT_HINT : undefined}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Scatter ────────────────────────────────────────────────────────────────
+
+type Dot = { x: number; y: number; group: number; label: string | null }
+
+/** Rows as dots, coloured by `series`: the most frequent groups keep a colour
+ * of their own, the rest share "Other" — no ninth colour is invented. */
+function dots(spec: ChartSpec, data: Data): { dots: Dot[]; groups: string[] } {
+  const names = data.columns.map((column) => column.name)
+  const xi = names.indexOf(spec.x ?? "")
+  const yi = names.indexOf(spec.y[0] ?? "")
+  const si = spec.series ? names.indexOf(spec.series) : -1
+  // What a dot is: the first column that names rather than measures.
+  const li = data.columns.findIndex(
+    (_, index) => index !== si && index !== xi && index !== yi && !isNumeric(data, index)
+  )
+  const counts = new Map<string, number>()
+  if (si >= 0) {
+    for (const row of data.rows) {
+      const group = row[si] ?? "NULL"
+      counts.set(group, (counts.get(group) ?? 0) + 1)
+    }
+  }
+  let groups = [...counts.keys()].sort((a, b) => a.localeCompare(b))
+  if (groups.length > MAX_SERIES) {
+    const keep = new Set(
+      [...groups]
+        .sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0))
+        .slice(0, MAX_SERIES - 1)
+    )
+    groups = [...groups.filter((group) => keep.has(group)), "Other"]
+  }
+  const indexOf = new Map(groups.map((group, index) => [group, index]))
+  const other = groups.length - 1
+  const list: Dot[] = []
+  for (const row of data.rows) {
+    const x = toNumber(row[xi])
+    const y = toNumber(row[yi])
+    if (x === null || y === null) continue
+    const group = si >= 0 ? (indexOf.get(row[si] ?? "NULL") ?? other) : 0
+    const label = li >= 0 ? (row[li] ?? null) : si >= 0 ? (row[si] ?? null) : null
+    list.push({ x, y, group, label })
+  }
+  return { dots: list, groups }
+}
+
+/** One measure against another: a dot per row, both axes from the data. */
+function Scatter({
+  spec,
+  scattered: { dots: list, groups },
+  height,
+}: {
+  spec: ChartSpec
+  scattered: ReturnType<typeof dots>
+  height: number
+}) {
+  const [ref, width] = useWidth(520)
+  const { active, setActive, onKeyDown } = useActive(list.length)
+  if (list.length === 0) {
+    return (
+      <p ref={ref} className="text-xs text-muted-foreground">
+        No row has both {spec.x} and {spec.y[0]}.
+      </p>
+    )
+  }
+
+  const xs = list.map((dot) => dot.x)
+  const ys = list.map((dot) => dot.y)
+  const xTicks = niceTicks(Math.min(...xs), Math.max(...xs), 5)
+  const yTicks = niceTicks(Math.min(...ys), Math.max(...ys), 5)
+  const xMin = xTicks[0]!
+  const xMax = xTicks.at(-1)!
+  const yMin = yTicks[0]!
+  const yMax = yTicks.at(-1)!
+  const xFormat = tickFormat(Math.max(Math.abs(xMin), Math.abs(xMax)))
+  const yFormat = tickFormat(Math.max(Math.abs(yMin), Math.abs(yMax)))
+  // Both axes are measures, so both are named: y above its ticks, x under its.
+  const margin = {
+    top: 18,
+    right: 12,
+    bottom: 34,
+    left: Math.max(...yTicks.map((tick) => yFormat(tick).length)) * CHAR + 10,
+  }
+  const plotW = Math.max(40, width - margin.left - margin.right)
+  const plotH = Math.max(40, height - margin.top - margin.bottom)
+  const x = (value: number) => margin.left + ((value - xMin) / (xMax - xMin || 1)) * plotW
+  const y = (value: number) => margin.top + plotH - ((value - yMin) / (yMax - yMin || 1)) * plotH
+  const radius = list.length > 500 ? 2.5 : list.length > 150 ? 3 : 4
+
+  // Tick labels along the bottom only where they clear the one before.
+  const shownX = (() => {
+    const shown = new Set<number>()
+    let edge = -Infinity
+    xTicks.forEach((tick, index) => {
+      const half = (xFormat(tick).length * CHAR) / 2
+      if (x(tick) - half >= edge + 8) {
+        shown.add(index)
+        edge = x(tick) + half
+      }
+    })
+    return shown
+  })()
+
+  const nearest = (clientX: number, clientY: number, element: Element) => {
+    const box = element.getBoundingClientRect()
+    const px = clientX - box.left
+    const py = clientY - box.top
+    let best = -1
+    let distance = 16 * 16
+    list.forEach((dot, index) => {
+      const d = (x(dot.x) - px) ** 2 + (y(dot.y) - py) ** 2
+      if (d < distance) {
+        distance = d
+        best = index
+      }
+    })
+    return best < 0 ? null : best
+  }
+
+  const hovered = active === null ? null : list[active]
+  return (
+      <div ref={ref} className="relative w-full">
+        <svg
+          width={width}
+          height={height}
+          role="img"
+          tabIndex={0}
+          aria-label={`Scatter of ${spec.y[0] ?? ""} against ${spec.x ?? ""}`}
+          onKeyDown={onKeyDown}
+          onBlur={() => setActive(null)}
+          onPointerMove={(event) =>
+            setActive(nearest(event.clientX, event.clientY, event.currentTarget))
+          }
+          onPointerLeave={() => setActive(null)}
+          className="block overflow-visible outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          {yTicks.map((tick) => (
+            <g key={`y${tick}`}>
+              <line
+                x1={margin.left}
+                x2={margin.left + plotW}
+                y1={y(tick)}
+                y2={y(tick)}
+                stroke={tick === 0 ? "var(--chart-axis)" : "var(--chart-grid)"}
+                strokeWidth={1}
+                shapeRendering="crispEdges"
+              />
+              <text
+                x={margin.left - 6}
+                y={y(tick)}
+                dy="0.32em"
+                textAnchor="end"
+                fontSize={FONT}
+                className="fill-muted-foreground tabular-nums"
+              >
+                {yFormat(tick)}
+              </text>
+            </g>
+          ))}
+          {xTicks.map((tick, index) => (
+            <g key={`x${tick}`}>
+              <line
+                x1={x(tick)}
+                x2={x(tick)}
+                y1={margin.top}
+                y2={margin.top + plotH}
+                stroke={tick === 0 ? "var(--chart-axis)" : "var(--chart-grid)"}
+                strokeWidth={1}
+                shapeRendering="crispEdges"
+              />
+              {shownX.has(index) && (
+                <text
+                  x={x(tick)}
+                  y={margin.top + plotH + 15}
+                  textAnchor="middle"
+                  fontSize={FONT}
+                  className="fill-muted-foreground tabular-nums"
+                >
+                  {xFormat(tick)}
+                </text>
+              )}
+            </g>
+          ))}
+          <text x={margin.left} y={margin.top - 8} fontSize={FONT} className="fill-muted-foreground">
+            {spec.y[0]}
+          </text>
+          <text
+            x={margin.left + plotW}
+            y={margin.top + plotH + 30}
+            textAnchor="end"
+            fontSize={FONT}
+            className="fill-muted-foreground"
+          >
+            {spec.x}
+          </text>
+
+          {list.map((dot, index) => (
+            <circle
+              key={index}
+              cx={x(dot.x)}
+              cy={y(dot.y)}
+              r={radius}
+              fill={color(dot.group)}
+              fillOpacity={active === null || active === index ? 0.75 : 0.4}
+              stroke="var(--card)"
+              strokeWidth={1}
+            />
+          ))}
+          {hovered && (
+            <circle
+              cx={x(hovered.x)}
+              cy={y(hovered.y)}
+              r={6}
+              fill={color(hovered.group)}
+              stroke="var(--card)"
+              strokeWidth={2}
+            />
+          )}
+        </svg>
+
+        {hovered && (
+          <Tooltip
+            left={x(hovered.x)}
+            top={y(hovered.y)}
+            flip={x(hovered.x) > width * 0.6}
+            label={hovered.label ?? `Row ${active! + 1}`}
+            rows={[
+              { name: spec.x ?? "", value: hovered.x, index: hovered.group },
+              { name: spec.y[0] ?? "", value: hovered.y, index: hovered.group },
+            ]}
+            notes={
+              groups.length > 1 && hovered.label !== groups[hovered.group]
+                ? [groups[hovered.group]!]
+                : []
+            }
+          />
+        )}
+      </div>
+  )
+}
+
+// ── Progress ───────────────────────────────────────────────────────────────
+
+/** A value against its target: a filled track, and a tick where the target is. */
+function Meter({ value, target, label }: { value: number | null; target: number | null; label: string }) {
+  const scale = Math.max(value ?? 0, target ?? 0) || 1
+  const filled = Math.max(0, Math.min(1, (value ?? 0) / scale))
+  const mark = target === null ? null : Math.max(0, Math.min(1, target / scale))
+  return (
+    <div
+      role="meter"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={target ?? undefined}
+      aria-valuenow={value ?? undefined}
+      className="relative h-2 w-full rounded-full bg-muted"
+    >
+      <div
+        className="absolute inset-y-0 left-0 rounded-full"
+        style={{ width: `${filled * 100}%`, background: color(0) }}
+      />
+      {mark !== null && (
+        <div
+          aria-hidden
+          className="absolute -inset-y-1 w-0.5 rounded-full bg-foreground/70"
+          style={{ left: `calc(${mark * 100}% - 1px)` }}
+        />
+      )}
+    </div>
+  )
+}
+
+/** A share of a target, in the status colour only once the target is passed. */
+function TargetShare({
+  value,
+  target,
+  upIsGood,
+}: {
+  value: number | null
+  target: number | null
+  upIsGood: boolean
+}) {
+  if (value === null || target === null || target === 0) return null
+  const part = value / target
+  // Reaching a goal is good news; going over a budget is bad.
+  const tone = upIsGood
+    ? value >= target
+      ? "var(--delta-good)"
+      : undefined
+    : value > target
+      ? "var(--delta-bad)"
+      : undefined
+  return (
+    <span className="font-medium tabular-nums" style={{ color: tone }}>
+      {shareFormat.format(part)}
+    </span>
+  )
+}
+
+/**
+ * A figure against its target. One row is a headline: the figure, its
+ * target, the track between. With x, a row each, every one against its own.
+ */
+function Progress({
+  spec,
+  data,
+  prepared,
+  limit,
+  titled,
+  onSelect,
+  selected,
+}: {
+  spec: ChartSpec
+  data: Data
+  prepared: Prepared
+  limit: number
+  titled: boolean
+} & Selection) {
+  const targetIndex = data.columns.findIndex((column) => column.name === spec.target)
+  const targets = data.rows.map((row) => toNumber(row[targetIndex]))
+  const values = prepared.values[0] ?? []
+  const upIsGood = spec.upIsGood ?? true
+
+  if (!spec.x) {
+    const value = values[0] ?? null
+    const target = targets[0] ?? null
+    return (
+      <div className="flex h-full flex-col gap-1.5">
+        {!titled && <div className="text-xs text-muted-foreground">{spec.y[0]}</div>}
+        <div className="flex items-baseline gap-2">
+          <div
+            className="text-3xl font-semibold tracking-tight text-foreground"
+            title={value === null ? undefined : formatNumber(value)}
+          >
+            {value === null ? "—" : figure(value)}
+          </div>
+          {target !== null && (
+            <div className="text-xs text-muted-foreground tabular-nums">of {figure(target)}</div>
+          )}
+        </div>
+        <div className="mt-auto flex flex-col gap-1.5 pt-1">
+          <Meter value={value} target={target} label={spec.y[0] ?? ""} />
+          <div className="text-xs text-muted-foreground">
+            <TargetShare value={value} target={target} upIsGood={upIsGood} /> of target
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const shown = Math.min(values.length, limit)
+  return (
+    <div className="flex flex-col gap-2.5">
+      {values.slice(0, shown).map((value, index) => {
+        const raw = prepared.raw[index] ?? null
+        const target = targets[index] ?? null
+        return (
+          <div
+            key={index}
+            role={onSelect ? "button" : undefined}
+            tabIndex={onSelect ? 0 : undefined}
+            onClick={onSelect ? () => onSelect(raw) : undefined}
+            onKeyDown={
+              onSelect
+                ? (event) => {
+                    if (event.key === "Enter") onSelect(raw)
+                  }
+                : undefined
+            }
+            title={onSelect ? SELECT_HINT : undefined}
+            className={cn(
+              "flex flex-col gap-1 rounded-sm text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+              onSelect && "cursor-pointer",
+              selected !== undefined && selected !== raw && "opacity-40"
+            )}
+          >
+            <div className="flex items-baseline gap-2">
+              <span className="min-w-0 flex-1 truncate text-foreground">
+                {prepared.labels[index]}
+              </span>
+              <span className="shrink-0 text-muted-foreground tabular-nums">
+                <span className="font-medium text-foreground">
+                  {value === null ? "—" : figure(value)}
+                </span>
+                {target !== null && <> / {figure(target)}</>}
+                {target !== null && value !== null && target !== 0 && " · "}
+                <TargetShare value={value} target={target} upIsGood={upIsGood} />
+              </span>
+            </div>
+            <Meter value={value} target={target} label={prepared.labels[index] ?? ""} />
+          </div>
+        )
+      })}
+      {values.length > shown && (
+        <p className="text-[11px] text-muted-foreground">
+          The first {shown} of {values.length}; the table has them all.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export function Chart({
   spec,
   data,
@@ -1147,6 +1956,10 @@ export function Chart({
   large?: boolean
 } & Selection) {
   const prepared = useMemo(() => prepare(spec, data), [spec, data])
+  const scattered = useMemo(
+    () => (spec.type === "scatter" ? dots(spec, data) : null),
+    [spec, data]
+  )
   let body: ReactNode
   if (data.rows.length === 0) {
     body = <p className="text-xs text-muted-foreground">No rows to draw.</p>
@@ -1161,6 +1974,47 @@ export function Chart({
       case "pivot":
         body = <Pivot spec={spec} data={data} onSelect={onSelect} selected={selected} />
         break
+      case "progress":
+        body = (
+          <Progress
+            spec={spec}
+            data={data}
+            prepared={prepared}
+            limit={limit}
+            titled={titled}
+            onSelect={onSelect}
+            selected={selected}
+          />
+        )
+        break
+      case "funnel":
+        body = (
+          <Funnel
+            spec={spec}
+            prepared={prepared}
+            limit={limit}
+            onSelect={onSelect}
+            selected={selected}
+          />
+        )
+        break
+      case "waterfall":
+      case "scatter": {
+        const plot = (at: number) =>
+          spec.type === "scatter" ? (
+            <Scatter spec={spec} scattered={scattered!} height={at} />
+          ) : (
+            <Waterfall
+              spec={spec}
+              prepared={prepared}
+              height={at}
+              onSelect={onSelect}
+              selected={selected}
+            />
+          )
+        body = fill ? <FillHeight least={height}>{plot}</FillHeight> : plot(height)
+        break
+      }
       case "table":
         body = (
           <ResultTable
@@ -1200,6 +2054,9 @@ export function Chart({
   return (
     <div className={cn("w-full", fill && "flex h-full min-h-0 flex-1 flex-col")}>
       {legend && <Legend names={prepared.names} line={spec.type === "line"} />}
+      {scattered && data.rows.length > 0 && (
+        <Legend names={scattered.groups} line={false} dot />
+      )}
       {body}
     </div>
   )

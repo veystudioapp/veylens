@@ -101,7 +101,13 @@ export function chartProblem(
   result: Pick<QueryResult, "columns" | "rows">
 ): string | null {
   const names = result.columns.map((column) => column.name)
-  const missing = [spec.x, spec.series ?? null, spec.compare ?? null, ...spec.y].filter(
+  const missing = [
+    spec.x,
+    spec.series ?? null,
+    spec.compare ?? null,
+    spec.target ?? null,
+    ...spec.y,
+  ].filter(
     (name): name is string => name !== null && !names.includes(name)
   )
   if (missing.length) {
@@ -113,7 +119,11 @@ export function chartProblem(
   if (spec.y.length > MAX_SERIES) {
     return `At most ${MAX_SERIES} series; fold the rest into "Other" in the SQL.`
   }
-  const notNumbers = [...spec.y, ...(spec.compare ? [spec.compare] : [])].filter(
+  const notNumbers = [
+    ...spec.y,
+    ...(spec.compare ? [spec.compare] : []),
+    ...(spec.target ? [spec.target] : []),
+  ].filter(
     (name) => !isNumeric(result, names.indexOf(name))
   )
   if (notNumbers.length) {
@@ -145,9 +155,56 @@ export function chartProblem(
         return "A pivot needs x (its rows) and series (its columns)."
       }
       return null
+    case "progress":
+      if (!spec.target) return "A progress needs target: the column holding the goal."
+      if (spec.y.length !== 1) return "A progress measures one value, y[0], against its target."
+      if (result.rows.length === 0) return "The query returned no rows."
+      if (!spec.x && result.rows.length > 1) {
+        return "A progress without x reads one row; with x, each row is a bar against its own target."
+      }
+      return null
+    case "scatter":
+      if (!spec.x) return "A scatter needs x: the measure along the bottom."
+      if (!isNumeric(result, names.indexOf(spec.x))) {
+        return `A scatter plots one measure against another; "${spec.x}" is not numeric.`
+      }
+      if (spec.y.length !== 1) return "A scatter plots one measure, y[0], against x."
+      return null
+    case "funnel":
+    case "waterfall":
+      if (!spec.x) return `A ${spec.type} needs x: the column naming its steps.`
+      if (spec.series) return `A ${spec.type} has no series; one row per step.`
+      if (spec.y.length !== 1) return `A ${spec.type} draws one value, y[0], per step.`
+      return null
     default:
       return spec.x ? null : `A ${spec.type} chart needs x.`
   }
+}
+
+/** One bar of a waterfall: where it starts and ends on the value axis. */
+export type BridgeStep = {
+  from: number
+  to: number
+  kind: "start" | "up" | "down" | "total"
+}
+
+/**
+ * A waterfall's bars: the first value is where it starts, from zero; each
+ * after it moves the running figure up or down from where the last left it;
+ * the total is where it ends, from zero again. A missing change moves nothing.
+ */
+export function bridge(values: (number | null)[]): BridgeStep[] {
+  if (values.length === 0) return []
+  const start = values[0] ?? 0
+  const steps: BridgeStep[] = [{ from: 0, to: start, kind: "start" }]
+  let running = start
+  for (const value of values.slice(1)) {
+    const change = value ?? 0
+    steps.push({ from: running, to: running + change, kind: change < 0 ? "down" : "up" })
+    running += change
+  }
+  steps.push({ from: 0, to: running, kind: "total" })
+  return steps
 }
 
 /** What a long result becomes when one column's values are its series. */

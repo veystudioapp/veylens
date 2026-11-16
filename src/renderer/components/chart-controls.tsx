@@ -31,8 +31,12 @@ export const CHART_LABELS: Record<ChartType, string> = {
   hbar: "Ranked bars",
   line: "Line",
   area: "Area",
+  scatter: "Scatter",
+  funnel: "Funnel",
+  waterfall: "Waterfall",
   stat: "Figure",
   kpi: "KPI",
+  progress: "Progress",
   pivot: "Matrix",
   table: "Table",
 }
@@ -40,8 +44,25 @@ export const CHART_LABELS: Record<ChartType, string> = {
 const NONE = "\u0000none"
 
 /** Types that take each choice. */
-const TAKES_X = new Set<ChartType>(["bar", "hbar", "line", "area", "kpi", "pivot"])
-const TAKES_SERIES = new Set<ChartType>(["bar", "hbar", "line", "area", "pivot"])
+const TAKES_X = new Set<ChartType>([
+  "bar",
+  "hbar",
+  "line",
+  "area",
+  "scatter",
+  "funnel",
+  "waterfall",
+  "kpi",
+  "progress",
+  "pivot",
+])
+const TAKES_SERIES = new Set<ChartType>(["bar", "hbar", "line", "area", "scatter", "pivot"])
+/** Types that draw one value. */
+const SINGLE = new Set<ChartType>(["kpi", "pivot", "scatter", "funnel", "waterfall", "progress"])
+/** Types with a good and a bad direction. */
+const TAKES_DIRECTION = new Set<ChartType>(["kpi", "progress", "waterfall"])
+/** Types whose x may be left out: a one-row figure. */
+const OPTIONAL_X = new Set<ChartType>(["kpi", "progress"])
 
 /**
  * Which form, along what, which numbers, split by what: the choices a chart
@@ -72,23 +93,36 @@ export function ChartControls({
     for (const name of names) items[name] = name
     return items
   }
-  const single = !!spec.series || spec.type === "kpi" || spec.type === "pivot"
+  const single = !!spec.series || SINGLE.has(spec.type)
   const seriesCount = spec.series ? 2 : spec.y.length
 
   const setType = (type: ChartType) => {
     const next: ChartSpec = { ...spec, type }
     if (!TAKES_X.has(type)) next.x = null
-    else if (!next.x && type !== "kpi") next.x = dimensions[0] ?? data.columns[0]?.name ?? null
+    else if (type === "scatter") {
+      // Two measures: x is one the plotted value is not.
+      if (!next.x || !numeric.includes(next.x)) {
+        next.x = numeric.find((name) => name !== next.y[0]) ?? null
+      }
+      if (next.y[0] === next.x) {
+        next.y = numeric.filter((name) => name !== next.x).slice(0, 1)
+      }
+    } else if (!next.x && !OPTIONAL_X.has(type)) {
+      next.x = dimensions[0] ?? data.columns[0]?.name ?? null
+    }
     if (!TAKES_SERIES.has(type)) next.series = null
     if (type === "pivot" && !next.series) {
       next.series = dimensions.find((name) => name !== next.x) ?? null
     }
-    if ((type === "kpi" || next.series) && next.y.length > 1) next.y = next.y.slice(0, 1)
+    if ((SINGLE.has(type) || next.series) && next.y.length > 1) next.y = next.y.slice(0, 1)
     if (!STACKABLE.has(type)) next.stacked = false
-    if (type !== "kpi") {
-      next.compare = null
-      delete next.upIsGood
+    if (type !== "kpi") next.compare = null
+    if (type === "progress") {
+      if (!next.target) next.target = numeric.find((name) => !next.y.includes(name)) ?? null
+    } else {
+      next.target = null
     }
+    if (!TAKES_DIRECTION.has(type)) delete next.upIsGood
     onChange(next)
   }
 
@@ -110,14 +144,18 @@ export function ChartControls({
               ? "Trend along"
               : spec.type === "pivot"
                 ? "Rows"
-                : spec.type === "hbar"
+                : spec.type === "hbar" || spec.type === "progress"
                   ? "Categories"
-                  : "X axis"
+                  : spec.type === "funnel" || spec.type === "waterfall"
+                    ? "Steps"
+                    : "X axis"
           }
           value={spec.x ?? NONE}
           items={options(
-            data.columns.map((column) => column.name),
-            spec.type === "kpi" ? "No trend" : null
+            spec.type === "scatter"
+              ? numeric.filter((name) => name !== spec.y[0])
+              : data.columns.map((column) => column.name),
+            spec.type === "kpi" ? "No trend" : spec.type === "progress" ? "One figure" : null
           )}
           onChange={(x) => onChange({ ...spec, x: x === NONE ? null : x })}
           className="h-7 max-w-40"
@@ -182,12 +220,12 @@ export function ChartControls({
       </DropdownMenu>
       {TAKES_SERIES.has(spec.type) && dimensions.length > 0 && (
         <SimpleSelect
-          label="Split by"
-          heading="Split by"
+          label={spec.type === "scatter" ? "Colour by" : "Split by"}
+          heading={spec.type === "scatter" ? "Colour by" : "Split by"}
           value={spec.series ?? NONE}
           items={options(
             dimensions.filter((name) => name !== spec.x),
-            spec.type === "pivot" ? null : "No split"
+            spec.type === "pivot" ? null : spec.type === "scatter" ? "One colour" : "No split"
           )}
           onChange={(series) =>
             onChange({
@@ -226,7 +264,20 @@ export function ChartControls({
           className="h-7 max-w-44"
         />
       )}
-      {spec.type === "kpi" && (
+      {spec.type === "progress" && (
+        <SimpleSelect
+          label="Target"
+          heading="Target"
+          value={spec.target ?? NONE}
+          items={options(
+            numeric.filter((name) => !spec.y.includes(name)),
+            null
+          )}
+          onChange={(target) => onChange({ ...spec, target })}
+          className="h-7 max-w-44"
+        />
+      )}
+      {TAKES_DIRECTION.has(spec.type) && (
         <Button
           variant="outline"
           size="sm"

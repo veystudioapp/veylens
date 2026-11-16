@@ -57,7 +57,9 @@ export const BUILTIN_SKILLS: BuiltinSkill[] = [
     description:
       "Before drawing a chart with show_chart or adding a chart tile, to pick its form.",
     instructions: `- **line** for change over time; **bar** for a few categories; **hbar** for ranked or part-to-whole (there is no pie); **stat** for a single figure.
-- A headline figure with its change is a **kpi**; a figure by two dimensions is a **pivot**.
+- A headline figure with its change is a **kpi**; against a goal or a budget, a **progress** (with target); a figure by two dimensions is a **pivot**.
+- Ordered steps people drop out of (visit → signup → order) are a **funnel**; a figure going from one value to another through its parts (last month + new − churn = this month) is a **waterfall**.
+- Whether two measures move together (price and quantity, per customer or per product) is a **scatter**.
 - A result in long form (GROUP BY month, channel) is drawn with **series** rather than reshaped in SQL.
 - One unit per chart: two measures of different scale are two charts.
 - Aggregate in SQL first.`,

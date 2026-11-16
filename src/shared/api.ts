@@ -341,7 +341,10 @@ export type PlanStepResult = {
  * time, `hbar` ranked horizontal bars (what a pie is asked for as), `line` and
  * `area` change over time, `stat` the one number a result is, `kpi` a number
  * against the period before with its trend, `pivot` a matrix of one value by
- * two dimensions, `table` the rows with numbers shaded by size. No pie, no
+ * two dimensions, `table` the rows with numbers shaded by size. `scatter` is
+ * one measure against another, a dot per row; `funnel` ordered steps and how
+ * many are left at each; `waterfall` a starting figure, the changes that move
+ * it, and where it ends; `progress` a figure against its target. No pie, no
  * second axis: see the chart component for why.
  */
 export const CHART_TYPES = [
@@ -349,8 +352,12 @@ export const CHART_TYPES = [
   "hbar",
   "line",
   "area",
+  "scatter",
+  "funnel",
+  "waterfall",
   "stat",
   "kpi",
+  "progress",
   "pivot",
   "table",
 ] as const
@@ -361,7 +368,9 @@ export type ChartSpec = {
   type: ChartType
   /**
    * The column along the category or time axis — the rows of a pivot, the
-   * period of a KPI's trend; null for `stat`, `table`, and a one-row KPI.
+   * period of a KPI's trend, a funnel's steps, a waterfall's changes, the
+   * horizontal measure of a scatter; null for `stat`, `table`, a one-row KPI
+   * and a one-row progress.
    */
   x: string | null
   /** The numeric columns plotted, one series each. */
@@ -369,14 +378,17 @@ export type ChartSpec = {
   /**
    * A column whose values become the series, for a result in long form
    * (`GROUP BY month, channel`): one line or bar per channel, of `y[0]`. The
-   * columns of a pivot.
+   * columns of a pivot; the colour of a scatter's dots.
    */
   series?: string | null
   /** Bars of several series on top of each other rather than side by side. */
   stacked?: boolean
   /** For a one-row KPI: the column holding the previous period's value. */
   compare?: string | null
-  /** For a KPI: whether a rise is good news. True unless said otherwise. */
+  /** For a progress: the column holding the target `y[0]` is measured against. */
+  target?: string | null
+  /** For a KPI, a progress and a waterfall: whether a rise is good news. True
+   * unless said otherwise. */
   upIsGood?: boolean
 }
 
