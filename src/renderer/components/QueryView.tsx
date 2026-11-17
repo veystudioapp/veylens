@@ -1,4 +1,5 @@
 import {
+  AlignLeft,
   BookOpen,
   ChartColumn,
   CircleAlert,
@@ -480,6 +481,25 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
             How the server would run it, without running it · {MOD}⇧↵
           </TooltipContent>
         </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!sql.trim()}
+                onClick={() => {
+                  editor.current?.format()
+                  editor.current?.focus()
+                }}
+              >
+                <AlignLeft />
+                {selected ? "Format selection" : "Format"}
+              </Button>
+            }
+          />
+          <TooltipContent>Lay it out one clause to a line · {FORMAT_KEYS}</TooltipContent>
+        </Tooltip>
         <span className="mx-1 h-4 w-px bg-border" />
         <Button
           variant="ghost"
@@ -668,6 +688,7 @@ export function QueryView({ tab, active }: { tab: QueryTab; active: boolean }) {
 }
 
 const MOD = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘" : "Ctrl+"
+const FORMAT_KEYS = MOD === "⌘" ? "⇧⌥F" : "Shift+Alt+F"
 
 /** A key, as the keyboard has it. */
 function Kbd({ children, onPrimary }: { children: ReactNode; onPrimary?: boolean }) {

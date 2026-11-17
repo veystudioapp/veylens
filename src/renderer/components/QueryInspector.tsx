@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlignLeft,
   CircleAlert,
   Copy,
   ExternalLink,
@@ -31,6 +32,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
+import { formatSql } from "@/lib/format-sql"
 import { useGateway } from "@/lib/gateway"
 import { errorMessage, useStore, type QueriesTab } from "@/lib/store"
 import { IconTile, KIND_TONE, toneColor } from "@/lib/tones"
@@ -380,9 +382,15 @@ function Detail({
   const openQuery = useStore((state) => state.openQuery)
   const [plan, setPlan] = useState<Plan | null>(null)
   const [copied, setCopied] = useState(false)
+  /** Kept from one statement to the next, so it is picked once. */
+  const [pretty, setPretty] = useState(false)
   useEffect(() => setPlan(null), [query.id])
 
   const inlined = connection?.engine === "postgres" ? inlinePostgresParams(query.sql, query.params) : query.sql
+  /** What is shown, copied and opened: the statement, laid out if asked. */
+  const tidy = (sql: string) => (pretty ? formatSql(sql, connection?.engine) : sql)
+  const engine = connection?.engine
+  const shown = useMemo(() => (pretty ? formatSql(query.sql, engine) : query.sql), [query.sql, pretty, engine])
   const explain = async () => {
     if (!connection || !inlined) return
     setPlan({ state: "running" })
@@ -422,7 +430,7 @@ function Detail({
         {query.error && <ErrorNote mono>{query.error}</ErrorNote>}
         <div className="relative">
           <pre className="selectable max-h-72 overflow-auto rounded-md border bg-muted/50 px-2.5 py-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap">
-            <SqlText text={query.sql} />
+            <SqlText text={shown} />
           </pre>
         </div>
         {query.params && query.params.length > 0 && (
@@ -459,7 +467,7 @@ function Detail({
             variant="outline"
             size="xs"
             disabled={!connection}
-            onClick={() => connection && openQuery(connection.id, { sql: inlined ?? query.sql, title: "From the gateway" })}
+            onClick={() => connection && openQuery(connection.id, { sql: tidy(inlined ?? query.sql), title: "From the gateway" })}
           >
             <ExternalLink />
             Open in SQL editor
@@ -469,10 +477,21 @@ function Detail({
             Ask the assistant
           </Button>
           <Button
+            variant="outline"
+            size="xs"
+            aria-pressed={pretty}
+            className={cn(pretty && "bg-muted text-foreground")}
+            title={pretty ? "Show it as the app sent it" : "Lay it out one clause to a line"}
+            onClick={() => setPretty((on) => !on)}
+          >
+            <AlignLeft />
+            {pretty ? "Original" : "Format"}
+          </Button>
+          <Button
             variant="ghost"
             size="xs"
             onClick={() => {
-              void navigator.clipboard.writeText(runnable(query))
+              void navigator.clipboard.writeText(tidy(runnable(query)))
               setCopied(true)
               setTimeout(() => setCopied(false), 1200)
             }}

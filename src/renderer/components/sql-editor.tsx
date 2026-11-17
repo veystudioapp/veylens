@@ -33,6 +33,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react"
 
 import type { Engine } from "@shared/api"
 
+import { formatSql } from "@/lib/format-sql"
 import { tableCompletionSource } from "@/lib/sql-completion-source"
 import { cn } from "@/lib/utils"
 
@@ -120,6 +121,9 @@ export type SqlEditorHandle = {
   focus(): void
   /** The main selection. */
   selection(): { from: number; to: number }
+  /** Lays out the selection, or everything when nothing is selected, as an
+   * edit of the user's own — one undo puts it back. */
+  format(): void
 }
 
 export type SqlEditorCursor = { line: number; column: number; selected: number }
@@ -158,6 +162,23 @@ function language({
   ])
 }
 
+/** Formats the selection, or the whole text when nothing is selected. Text the
+ * formatter cannot parse is left alone. */
+function formatIn(view: EditorView, { engine, upperCaseKeywords }: Pick<Props, "engine" | "upperCaseKeywords">) {
+  const { from, to } = view.state.selection.main
+  const [start, end] = from === to ? [0, view.state.doc.length] : [from, to]
+  const before = view.state.sliceDoc(start, end)
+  if (!before.trim()) return
+  const after = formatSql(before, engine, upperCaseKeywords ? "upper" : "lower")
+  if (after === before) return
+  view.dispatch({
+    changes: { from: start, to: end, insert: after },
+    selection: from === to ? undefined : { anchor: start, head: start + after.length },
+    userEvent: "input.format",
+    scrollIntoView: true,
+  })
+}
+
 /** The SQL tab's editor: CodeMirror, with the connection's tables and
  * columns to complete and the last run's error drawn where it points. */
 export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor(props, ref) {
@@ -174,6 +195,9 @@ export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor(p
       selection: () => {
         const main = view.current?.state.selection.main
         return main ? { from: main.from, to: main.to } : { from: 0, to: 0 }
+      },
+      format: () => {
+        if (view.current) formatIn(view.current, latest.current)
       },
     }),
     []
@@ -213,6 +237,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor(p
             keymap.of([
               { key: "Mod-Enter", run: () => (latest.current.onRun(), true) },
               { key: "Shift-Mod-Enter", run: () => (latest.current.onPlan(), true) },
+              { key: "Shift-Alt-f", run: (target) => (formatIn(target, latest.current), true) },
             ])
           ),
           keymap.of([
