@@ -23,6 +23,7 @@ import {
 } from "lucide-react"
 import {
   memo,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -31,6 +32,7 @@ import {
   useState,
   type ClipboardEvent,
   type DragEvent,
+  type PointerEvent,
   type ReactNode,
   type Ref,
 } from "react"
@@ -84,6 +86,10 @@ type ChartItem = Extract<ChatItem, { kind: "chart" }>
 
 /** Rows of a result shown in the chat itself; the viewer has the rest. */
 const PREVIEW_ROWS = 8
+
+/** Where the message box's dragged height is kept, and the least it goes to. */
+const COMPOSER_HEIGHT_KEY = "chat-composer-height"
+const COMPOSER_MIN = 48
 
 type Preview = {
   columns: string[]
@@ -955,13 +961,78 @@ function Composer({ ref }: { ref?: Ref<ComposerHandle> }) {
     })
   }, [draft, setDraft])
 
-  // The field grows with what is typed, up to a point.
-  useLayoutEffect(() => {
+  /** The height the user dragged the field to, or null to fit what is typed.
+   * Kept across chats and restarts. */
+  const [chosen, setChosen] = useState<number | null>(() => {
+    const saved = Number(localStorage.getItem(COMPOSER_HEIGHT_KEY))
+    return saved >= COMPOSER_MIN ? saved : null
+  })
+
+  // The field grows with what is typed, from the height the user chose (or
+  // two lines) up to that or 180px, whichever is more; only past that does it
+  // scroll. An empty field is measured with its placeholder in it, which the
+  // browser leaves out of `scrollHeight`, so a hint that wraps is not cut off
+  // behind a scroll bar.
+  const fit = useCallback(() => {
     const element = field.current?.element
     if (!element) return
     element.style.height = "auto"
-    element.style.height = `${Math.min(element.scrollHeight, 180)}px`
-  }, [text])
+    let natural = element.scrollHeight
+    if (!element.value && element.placeholder) {
+      element.value = element.placeholder
+      natural = element.scrollHeight
+      element.value = ""
+    }
+    const floor = chosen ?? 0
+    const height = Math.max(floor, Math.min(natural, Math.max(180, floor)))
+    element.style.height = `${height}px`
+    element.style.overflowY = natural > height ? "auto" : "hidden"
+  }, [chosen])
+  useLayoutEffect(fit, [text, fit])
+  // The placeholder wraps differently as the panel is made wider or narrower.
+  useEffect(() => {
+    const element = field.current?.element
+    if (!element) return
+    let width = element.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth === width) return
+      width = element.clientWidth
+      fit()
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [fit])
+
+  /** Dragging the top edge: up makes the field taller. A double click goes
+   * back to fitting the text. */
+  const startResize = (event: PointerEvent<HTMLDivElement>) => {
+    const element = field.current?.element
+    if (!element) return
+    event.preventDefault()
+    const handle = event.currentTarget
+    handle.setPointerCapture(event.pointerId)
+    const startY = event.clientY
+    const startHeight = element.offsetHeight
+    const max = Math.max(COMPOSER_MIN, Math.round(window.innerHeight * 0.6))
+    let last = startHeight
+    const move = (moved: globalThis.PointerEvent) => {
+      last = Math.min(max, Math.max(COMPOSER_MIN, startHeight + startY - moved.clientY))
+      setChosen(last)
+    }
+    const up = () => {
+      handle.removeEventListener("pointermove", move)
+      handle.removeEventListener("pointerup", up)
+      handle.removeEventListener("pointercancel", up)
+      localStorage.setItem(COMPOSER_HEIGHT_KEY, String(last))
+    }
+    handle.addEventListener("pointermove", move)
+    handle.addEventListener("pointerup", up)
+    handle.addEventListener("pointercancel", up)
+  }
+  const resetSize = () => {
+    setChosen(null)
+    localStorage.removeItem(COMPOSER_HEIGHT_KEY)
+  }
 
   const submit = async () => {
     const draftText = text
@@ -983,7 +1054,18 @@ function Composer({ ref }: { ref?: Ref<ComposerHandle> }) {
   return (
     <div className="shrink-0 px-3 pb-3">
       {error && <ErrorNote className="mb-2">{error}</ErrorNote>}
-      <div className="rounded-lg border border-input bg-background shadow-xs transition-colors focus-within:border-ring dark:bg-input/30">
+      <div className="relative rounded-lg border border-input bg-background shadow-xs transition-colors focus-within:border-ring dark:bg-input/30">
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize the message box"
+          title="Drag to resize · double-click to fit the text"
+          onPointerDown={startResize}
+          onDoubleClick={resetSize}
+          className="group/resize absolute inset-x-3 -top-1.5 z-10 flex h-3 cursor-ns-resize touch-none items-center justify-center"
+        >
+          <span className="h-1 w-8 rounded-full bg-border opacity-0 transition-opacity group-hover/resize:opacity-100" />
+        </div>
         {/* The pictures the text still names: a tag deleted by hand takes
             its thumbnail with it, so the strip is the truth about what goes. */}
         {pictures.length > 0 && (
