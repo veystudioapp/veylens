@@ -2,17 +2,33 @@ import {
   ArrowDown,
   ArrowUp,
   CalendarRange,
+  ChartArea,
+  ChartBar,
+  ChartColumn,
+  ChartColumnDecreasing,
+  ChartLine,
+  ChartNoAxesCombined,
+  ChartPie,
+  ChartScatter,
   Check,
   Copy,
+  Funnel,
+  Gauge,
+  Grid3x3,
   Hash,
+  LayoutGrid,
   ListChecks,
   ListFilter,
   Play,
   Plus,
   Search,
   SlidersHorizontal,
+  Table2,
   ToggleRight,
   Trash2,
+  TrendingUp,
+  TriangleAlert,
+  Type,
   type LucideIcon,
 } from "lucide-react"
 import { useEffect, useRef, useState, type ReactNode } from "react"
@@ -20,6 +36,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
   DATE_PRESETS,
   FILTER_KINDS,
+  type ChartType,
   TEXT_MATCHES,
   type DashboardFilter,
   type DashboardTile,
@@ -49,6 +66,80 @@ import { cn } from "@/lib/utils"
 
 import { IconButton } from "../icon-button"
 import { ErrorNote } from "../state-view"
+
+const TILE_ICON: Record<ChartType, LucideIcon> = {
+  bar: ChartColumn,
+  hbar: ChartBar,
+  line: ChartLine,
+  area: ChartArea,
+  combo: ChartNoAxesCombined,
+  scatter: ChartScatter,
+  pie: ChartPie,
+  donut: ChartPie,
+  treemap: LayoutGrid,
+  funnel: Funnel,
+  waterfall: ChartColumnDecreasing,
+  stat: Hash,
+  kpi: TrendingUp,
+  progress: Gauge,
+  pivot: Grid3x3,
+  table: Table2,
+}
+
+/** Past this many, the tiles a filter narrows wait behind "more". */
+const USERS_SHOWN = 6
+
+/** The tiles a filter narrows, each a chip with its form, or a warning that none is. */
+function UsedBy({ tiles }: { tiles: DashboardTile[] }) {
+  const [all, setAll] = useState(false)
+  if (tiles.length === 0) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-[var(--tone-amber)]">
+        <TriangleAlert className="size-3.5 shrink-0" />
+        No tile uses it yet, so it narrows nothing.
+      </p>
+    )
+  }
+  const shown = all ? tiles : tiles.slice(0, USERS_SHOWN)
+  const hidden = tiles.length - shown.length
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-xs text-muted-foreground">
+        Narrows{" "}
+        <span className="font-medium text-foreground tabular-nums">
+          {tiles.length} {tiles.length === 1 ? "tile" : "tiles"}
+        </span>
+      </div>
+      <ul className="flex flex-wrap gap-1.5">
+        {shown.map((tile) => {
+          const Icon = tile.chart ? TILE_ICON[tile.chart.type] : Type
+          const title = tile.title.trim() || "Untitled"
+          return (
+            <li
+              key={tile.id}
+              title={title}
+              className="flex h-6 max-w-64 items-center gap-1.5 rounded-md border bg-background px-2 text-[11px] text-foreground"
+            >
+              <Icon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+              <span className="truncate">{title}</span>
+            </li>
+          )
+        })}
+        {(hidden > 0 || (all && tiles.length > USERS_SHOWN)) && (
+          <li>
+            <button
+              type="button"
+              onClick={() => setAll(!all)}
+              className="flex h-6 items-center rounded-md px-2 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              {all ? "Show fewer" : `+${hidden} more`}
+            </button>
+          </li>
+        )}
+      </ul>
+    </div>
+  )
+}
 
 type Entry = {
   /** Stable while the dialog is open, for a filter not yet saved too. */
@@ -761,16 +852,7 @@ export function FilterDialog({
                         <CopyButton text={snippet} />
                       </span>
                     </div>
-                    <p
-                      className={cn(
-                        "text-xs",
-                        users.length ? "text-muted-foreground" : "text-[var(--tone-amber)]"
-                      )}
-                    >
-                      {users.length
-                        ? `Used by ${users.map((tile) => `"${tile.title || "Untitled"}"`).join(", ")}.`
-                        : "No tile uses it yet, so it narrows nothing."}
-                    </p>
+                    <UsedBy key={entry.key} tiles={users} />
                   </Section>
                 )
               })()}

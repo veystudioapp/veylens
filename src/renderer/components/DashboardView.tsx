@@ -6,6 +6,7 @@ import {
   Ellipsis,
   ExternalLink,
   FileImage,
+  FileText,
   GripVertical,
   LayoutDashboard,
   Pencil,
@@ -45,7 +46,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
-import { downloadCsv, downloadPng } from "@/lib/export"
+import { downloadCsv, downloadPng, EXPORT_HIDDEN, exportDashboard } from "@/lib/export"
 import { errorMessage, useStore, type Tab } from "@/lib/store"
 import { connectionTone, IconTile, KIND_TONE, toneColor, toneStyle } from "@/lib/tones"
 import { cn } from "@/lib/utils"
@@ -178,6 +179,10 @@ const SELECTABLE = new Set([
   "hbar",
   "line",
   "area",
+  "combo",
+  "pie",
+  "donut",
+  "treemap",
   "pivot",
   "funnel",
   "waterfall",
@@ -185,7 +190,19 @@ const SELECTABLE = new Set([
 ])
 /** Charts drawn as a picture, which is what a PNG can be made of: figures and
  * tables are text, and are exported as CSV. */
-const PICTURED = new Set(["bar", "hbar", "line", "area", "scatter", "funnel", "waterfall"])
+const PICTURED = new Set([
+  "bar",
+  "hbar",
+  "line",
+  "area",
+  "combo",
+  "scatter",
+  "pie",
+  "donut",
+  "treemap",
+  "funnel",
+  "waterfall",
+])
 
 /** The grid's columns at this width: 4, then 2, then 1. */
 function useColumns() {
@@ -403,7 +420,8 @@ function TileCard({
           // In the tile's margin, so the title lines up with what is below it.
           className={cn(
             "flex size-5 cursor-grab items-center justify-center rounded text-muted-foreground opacity-0 group-hover/tile:opacity-100 focus-visible:opacity-100",
-            !text && "absolute top-3.5 left-0"
+            !text && "absolute top-3.5 left-0",
+            EXPORT_HIDDEN
           )}
           tabIndex={0}
         >
@@ -446,6 +464,7 @@ function TileCard({
         <span
           className={cn(
             "-mr-1.5 flex items-center",
+            EXPORT_HIDDEN,
             !text &&
               "opacity-0 transition-opacity group-focus-within/tile:opacity-100 group-hover/tile:opacity-100 has-[[aria-expanded=true]]:opacity-100"
           )}
@@ -563,7 +582,7 @@ function TileCard({
             selected={source ? cross!.value : undefined}
             onSelect={
               selectable
-                ? (value) => onSelect(spec.x!, value)
+                ? (value, column) => onSelect(column ?? spec.x!, value)
                 : undefined
             }
           />
@@ -597,6 +616,7 @@ export function DashboardView({ tab, active }: { tab: DashboardTab; active: bool
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [dragging, setDragging] = useState<string | null>(null)
   const [grid, columns] = useColumns()
+  const sheet = useRef<HTMLDivElement>(null)
 
   // Data the agent changed is data every tile may show.
   useEffect(() => {
@@ -663,6 +683,21 @@ export function DashboardView({ tab, active }: { tab: DashboardTab; active: bool
     void send(
       `Summarise the dashboard "${dashboard.title}"${scope ? ` (${scope})` : ""}: what stands out, what changed against the previous period, and anything that needs attention. Read it with get_dashboard and run its tiles' queries with the current filter values.`
     ).catch((failure) => setError(errorMessage(failure)))
+  }
+
+  /** The tiles as they stand, with what they are scoped to written above them. */
+  const exportAs = (format: "pdf" | "png") => {
+    if (!sheet.current) return
+    const scope = [
+      connection?.name,
+      ...dashboard.filters.map((filter) => `${filter.label}: ${filterValueLabel(filter)}`),
+      cross ? `${cross.column} = ${cross.value ?? "NULL"}` : null,
+      `as of ${refreshedAt.toLocaleString()}`,
+    ].filter(Boolean)
+    setError(null)
+    exportDashboard(sheet.current, dashboard.title, scope.join(" · "), format).catch((failure) =>
+      setError(errorMessage(failure))
+    )
   }
 
   const blankTile = (kind: "query" | "text"): DashboardTile => ({
@@ -762,6 +797,21 @@ export function DashboardView({ tab, active }: { tab: DashboardTab; active: bool
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
+              disabled={dashboard.tiles.length === 0}
+              onClick={() => exportAs("pdf")}
+            >
+              <FileText />
+              Export PDF
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={dashboard.tiles.length === 0}
+              onClick={() => exportAs("png")}
+            >
+              <FileImage />
+              Export PNG
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
               variant="destructive"
               onClick={async () => {
                 const ok = await confirm({
@@ -827,6 +877,7 @@ export function DashboardView({ tab, active }: { tab: DashboardTab; active: bool
           </div>
         ) : (
           <div
+            ref={sheet}
             className="grid content-start gap-3 px-4 pt-1 pb-6"
             style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
             onDragEnd={() => setDragging(null)}

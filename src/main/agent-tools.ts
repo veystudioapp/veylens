@@ -12,6 +12,7 @@ import {
   type Dashboard,
   type DashboardFilter,
   type ParamValues,
+  type CellRule,
   type ChartSpec,
   type ChatItem,
   type Connection,
@@ -19,7 +20,7 @@ import {
   type ViewerTarget,
 } from "../shared/api"
 import { addressOf } from "../shared/address"
-import { chartProblem } from "../shared/chart"
+import { chartProblem, MAX_FORECAST } from "../shared/chart"
 import {
   bindParameters,
   filterParams,
@@ -204,17 +205,17 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
     type: z
       .enum(CHART_TYPES)
       .describe(
-        "bar: columns per category or period. hbar: ranked horizontal bars — use it for part-to-whole or many/long categories (there is no pie). line: change over time. area: one series over time. stat: the single number a one-row result is. kpi: a headline figure with its change — either one row with the value and the previous period's value (compare), or rows per period (x) whose last row is now, drawn with a sparkline. pivot: a matrix of y[0] with x as rows and series as columns, shaded by size. table: the rows, with the y columns shaded by size. scatter: one measure (y[0]) against another (x, numeric), a dot per row, optionally coloured by series — for how two measures relate. funnel: ordered steps (x, one row per step, in order) with y[0] the count reaching each — for conversion. waterfall: a bridge — the first row is the starting figure, each row after it a signed change (x names it), and the end total is drawn after them; do not include the total row yourself. progress: y[0] against its target column (target) — one row for a headline, or a row per category (x) each against its own target."
+        "bar: columns per category or period. hbar: ranked horizontal bars — use it to compare or rank parts, or for many/long categories. pie / donut: the share of each part of one whole at a glance (x the parts, y[0] their positive values, one row each); past 6 parts the smallest fold into Other, so prefer hbar when parts must be compared. treemap: many parts of one whole as rectangles sized by y[0] (positive), for a breakdown with many categories. line: change over time. area: one series over time. combo: columns of y over x with a second measure of a different unit (line) drawn as a line on its own right-hand axis — e.g. revenue with conversion rate; only when the two must be read together. stat: the single number a one-row result is. kpi: a headline figure with its change — either one row with the value and the previous period's value (compare), or rows per period (x) whose last row is now, drawn with a sparkline. pivot: a matrix of y[0] with x as rows and series as columns, shaded by size. table: the rows, with the y columns shaded by size. scatter: one measure (y[0]) against another (x, numeric), a dot per row, optionally coloured by series and sized by a third measure (size, making it a bubble chart) — for how measures relate. funnel: ordered steps (x, one row per step, in order) with y[0] the count reaching each — for conversion. waterfall: a bridge — the first row is the starting figure, each row after it a signed change (x names it), and the end total is drawn after them; do not include the total row yourself. progress: y[0] against its target column (target) — one row for a headline, or a row per category (x) each against its own target."
       ),
     x: z
       .string()
       .optional()
-      .describe("The category or time column (a pivot's rows; a kpi's period; a funnel's or waterfall's steps; a scatter's horizontal measure). Omit for stat, table, a one-row kpi and a one-row progress."),
+      .describe("The category or time column (a pivot's rows; a kpi's period; a funnel's or waterfall's steps; a pie's or treemap's parts; a scatter's horizontal measure). Omit for stat, table, a one-row kpi and a one-row progress."),
     y: z
       .array(z.string())
       .max(MAX_SERIES)
       .describe(
-        "Numeric columns, one series each, all in the same unit — never two scales on one chart; make two charts instead. With series, exactly one."
+        "Numeric columns, one series each, all in the same unit — never two scales on one chart, except a combo's line; otherwise make two charts. With series, exactly one."
       ),
     series: z
       .string()
@@ -223,7 +224,59 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
     stacked: z
       .boolean()
       .optional()
-      .describe("bar, hbar, area: stack the series, for parts of a whole."),
+      .describe("bar, hbar, area, combo: stack the series, for parts of a whole."),
+    percent: z
+      .boolean()
+      .optional()
+      .describe("bar, hbar, area, combo: stack to 100%, each series as its share of the category's total — for how a mix changes, not its size. Needs two or more series."),
+    line: z
+      .string()
+      .optional()
+      .describe("combo: the numeric column drawn as a line on the right axis; not one of y."),
+    size: z
+      .string()
+      .optional()
+      .describe("scatter: a numeric column sizing each dot by area — a bubble chart."),
+    analytics: z
+      .object({
+        average: z.boolean().optional(),
+        median: z.boolean().optional(),
+        trend: z.boolean().optional(),
+        forecast: z.number().int().min(1).max(MAX_FORECAST).optional(),
+        anomalies: z.boolean().optional(),
+        constant: z.number().optional(),
+        constant_label: z.string().optional(),
+      })
+      .optional()
+      .describe(
+        "bar, line, area, combo (per series, unstacked): average / median lines, a least-squares trend line, anomalies (points over 2σ off the trend ringed), forecast (line and area: periods ahead along the trend with a 95% range). constant: a fixed goal or limit line, with constant_label. scatter: trend and constant only."
+      ),
+    levels: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "bar, hbar, line, area, combo, pie, donut, treemap: finer columns under x, coarse to fine (x year, levels [quarter, month]) — the viewer drills in by clicking, summing y at each level. The SQL returns the finest grain with every level as a column."
+      ),
+    facet: z
+      .string()
+      .optional()
+      .describe("bar, line, area, combo: small multiples — one small chart per value of this column, all on one scale. Not with series."),
+    rules: z
+      .array(
+        z.union([
+          z.object({ column: z.string(), kind: z.enum(["bars", "icons"]), up_is_good: z.boolean().optional() }),
+          z.object({
+            column: z.string(),
+            kind: z.enum(["above", "below"]),
+            value: z.number(),
+            tone: z.enum(["good", "bad"]),
+          }),
+        ])
+      )
+      .optional()
+      .describe(
+        "table, pivot: conditional formatting of a numeric column's cells — bars (a data bar), icons (an arrow by sign), above / below (the figure in the good or bad colour past value). A pivot's rules are on y[0]."
+      ),
     compare: z
       .string()
       .optional()
@@ -244,6 +297,24 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
     y: string[]
     series?: string
     stacked?: boolean
+    percent?: boolean
+    line?: string
+    size?: string
+    analytics?: {
+      average?: boolean
+      median?: boolean
+      trend?: boolean
+      forecast?: number
+      anomalies?: boolean
+      constant?: number
+      constant_label?: string
+    }
+    levels?: string[]
+    facet?: string
+    rules?: (
+      | { column: string; kind: "bars" | "icons"; up_is_good?: boolean }
+      | { column: string; kind: "above" | "below"; value: number; tone: "good" | "bad" }
+    )[]
     compare?: string
     target?: string
     up_is_good?: boolean
@@ -254,7 +325,36 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
     x: args.x ?? null,
     y: args.y,
     ...(args.series ? { series: args.series } : {}),
-    ...(args.stacked ? { stacked: true } : {}),
+    ...(args.stacked || args.percent ? { stacked: true } : {}),
+    ...(args.percent ? { percent: true } : {}),
+    ...(args.line ? { line: args.line } : {}),
+    ...(args.size ? { size: args.size } : {}),
+    ...(args.analytics
+      ? {
+          analytics: {
+            ...(args.analytics.average ? { average: true } : {}),
+            ...(args.analytics.median ? { median: true } : {}),
+            ...(args.analytics.trend ? { trend: true } : {}),
+            ...(args.analytics.forecast ? { forecast: args.analytics.forecast } : {}),
+            ...(args.analytics.anomalies ? { anomalies: true } : {}),
+            ...(args.analytics.constant !== undefined ? { constant: args.analytics.constant } : {}),
+            ...(args.analytics.constant_label ? { constantLabel: args.analytics.constant_label } : {}),
+          },
+        }
+      : {}),
+    ...(args.levels?.length ? { levels: args.levels } : {}),
+    ...(args.facet ? { facet: args.facet } : {}),
+    ...(args.rules?.length
+      ? {
+          rules: args.rules.map((rule): CellRule =>
+            rule.kind === "bars"
+              ? { column: rule.column, kind: "bars" }
+              : rule.kind === "icons"
+                ? { column: rule.column, kind: "icons", ...(rule.up_is_good === false ? { upIsGood: false } : {}) }
+                : rule
+          ),
+        }
+      : {}),
     ...(args.compare ? { compare: args.compare } : {}),
     ...(args.target ? { target: args.target } : {}),
     ...(args.up_is_good === false ? { upIsGood: false } : {}),

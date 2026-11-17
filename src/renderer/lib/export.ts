@@ -41,6 +41,77 @@ export function downloadCsv(
   )
 }
 
+const escapeHtml = (text: string) =>
+  text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`)
+
+/** The class that keeps a control — a drag handle, a tile's buttons — out of an export. */
+export const EXPORT_HIDDEN = "export-hidden"
+
+/** Height of the export's own heading, in CSS pixels. */
+const HEADING = 64
+
+/**
+ * A dashboard as a page of its own: the grid's markup as drawn now, the
+ * app's styles, the theme the window is in, and a heading saying what it is
+ * and as of when. No script: what is printed is what is on screen.
+ */
+export function dashboardPage(
+  grid: HTMLElement,
+  title: string,
+  subtitle: string
+): { html: string; width: number; height: number } {
+  const css: string[] = []
+  for (const sheet of document.styleSheets) {
+    try {
+      for (const rule of sheet.cssRules) css.push(rule.cssText)
+    } catch {
+      // A sheet from elsewhere does not let its rules be read; the app has none.
+    }
+  }
+  const root = document.documentElement
+  const attributes = [...root.attributes]
+    .filter((attribute) => attribute.name === "class" || attribute.name.startsWith("data-"))
+    .map((attribute) => ` ${attribute.name}="${escapeHtml(attribute.value)}"`)
+    .join("")
+  const box = grid.getBoundingClientRect()
+  const width = Math.ceil(box.width)
+  const height = HEADING + Math.ceil(grid.scrollHeight)
+  const html = `<!doctype html>
+<html${attributes}>
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<style>${css.join("\n")}</style>
+<style>
+  @page { margin: 0; }
+  html, body { height: auto !important; overflow: visible !important; }
+  body { width: ${width}px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .${EXPORT_HIDDEN} { display: none !important; }
+  .export-heading { box-sizing: border-box; height: ${HEADING}px; padding: 16px 16px 0; }
+  .export-heading h1 { margin: 0; font-size: 16px; font-weight: 600; color: var(--foreground); }
+  .export-heading p { margin: 2px 0 0; font-size: 11px; color: var(--muted-foreground); }
+</style>
+</head>
+<body class="${escapeHtml(document.body.className)}">
+<div class="bg-muted/50 dark:bg-background">
+<header class="export-heading"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(subtitle)}</p></header>
+${grid.outerHTML}
+</div>
+</body>
+</html>`
+  return { html, width, height }
+}
+
+/** A dashboard saved as a PDF or a PNG, where the user picks. False when they cancel. */
+export function exportDashboard(
+  grid: HTMLElement,
+  title: string,
+  subtitle: string,
+  format: "pdf" | "png"
+): Promise<boolean> {
+  return window.veylens.exportDashboard({ ...dashboardPage(grid, title, subtitle), title, format })
+}
+
 const PAINT = ["fill", "stroke", "opacity", "font-size", "font-weight", "font-family"]
 
 /**

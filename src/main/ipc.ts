@@ -18,6 +18,7 @@ import { startsLikeRead } from "../shared/statements"
 import { agentModels } from "./agent-models"
 import type { Assist } from "./assist"
 import { describeChanges, refusal, type AuditLog } from "./audit"
+import { exportDashboard } from "./dashboard-export"
 import type { Chats } from "./chats"
 import type { Connections } from "./connections"
 import type { Gateway } from "./gateway"
@@ -311,6 +312,7 @@ export function registerIpc({
       }
     },
     pinToDashboard: async (input) => library.pin(input),
+    exportDashboard: (input) => exportDashboard(input),
 
     listSkills: async () => library.skills(),
     saveSkill: async (input) => library.saveSkill(input),

@@ -11,7 +11,22 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 import { tileText, type ChatEvent, type ChatItem as ChatItemT, type ViewerTarget } from "../src/shared/api"
-import { bridge, chartProblem, inferChart, isNumeric, widen } from "../src/shared/chart"
+import {
+  anomalies,
+  bridge,
+  chartProblem,
+  fitSeries,
+  forecast,
+  inferChart,
+  isNumeric,
+  mean,
+  median,
+  nextLabels,
+  parts,
+  rollUp,
+  squarify,
+  widen,
+} from "../src/shared/chart"
 import {
   bindParameters,
   dateRange,
@@ -580,6 +595,150 @@ await check("chart: a waterfall starts, moves, and ends at its total", () => {
     { from: 0, to: 85, kind: "total" },
   ])
   assert.deepEqual(bridge([]), [])
+})
+
+await check("chart: pie, treemap, combo, 100% and bubble are checked", () => {
+  const goal = { columns: [txt("region"), num("sales"), num("goal"), num("rate")], rows: [["north", "80", "100", "0.2"], ["south", "120", "100", "0.3"]] }
+  for (const type of ["pie", "donut", "treemap"] as const) {
+    assert.equal(chartProblem({ type, x: "region", y: ["sales"] }, goal), null)
+    assert.match(chartProblem({ type, x: null, y: ["sales"] }, goal)!, /needs x/)
+    assert.match(chartProblem({ type, x: "region", y: ["sales", "goal"] }, goal)!, /one value/)
+  }
+  const loss = { ...goal, rows: [...goal.rows, ["east", "-5", "10", "0.1"]] }
+  assert.match(chartProblem({ type: "pie", x: "region", y: ["sales"] }, loss)!, /negative/)
+
+  assert.equal(chartProblem({ type: "combo", x: "region", y: ["sales", "goal"], line: "rate" }, goal), null)
+  assert.equal(chartProblem({ type: "combo", x: "region", y: ["sales", "goal"], line: "rate", stacked: true }, goal), null)
+  assert.match(chartProblem({ type: "combo", x: "region", y: ["sales"] }, goal)!, /needs line/)
+  assert.match(chartProblem({ type: "combo", x: "region", y: ["sales"], line: "sales" }, goal)!, /must not also be/)
+  assert.match(chartProblem({ type: "combo", x: "region", y: ["sales"], line: "region" }, goal)!, /not numeric/)
+  assert.match(chartProblem({ type: "bar", x: "region", y: ["sales"], line: "rate" }, goal)!, /Only a combo/)
+
+  assert.equal(chartProblem({ type: "bar", x: "region", y: ["sales", "goal"], stacked: true, percent: true }, goal), null)
+  assert.match(chartProblem({ type: "bar", x: "region", y: ["sales"], percent: true }, goal)!, /several series/)
+  assert.match(chartProblem({ type: "line", x: "region", y: ["sales", "goal"], percent: true }, goal)!, /cannot be stacked/)
+
+  assert.equal(chartProblem({ type: "scatter", x: "goal", y: ["sales"], size: "rate" }, goal), null)
+  assert.match(chartProblem({ type: "scatter", x: "goal", y: ["sales"], size: "region" }, goal)!, /not numeric/)
+  assert.match(chartProblem({ type: "bar", x: "region", y: ["sales"], size: "rate" }, goal)!, /Only a scatter/)
+})
+
+await check("chart: analytics, drill levels, facets and cell rules are checked", () => {
+  const sales = {
+    columns: [txt("year"), txt("month"), txt("region"), num("sales"), num("goal")],
+    rows: [["2025", "2025-01", "north", "10", "12"], ["2025", "2025-02", "south", "20", "12"], ["2026", "2026-01", "north", "30", "12"]],
+  }
+  assert.equal(chartProblem({ type: "line", x: "month", y: ["sales"], analytics: { average: true, trend: true, forecast: 3 } }, sales), null)
+  assert.match(chartProblem({ type: "bar", x: "month", y: ["sales"], analytics: { forecast: 3 } }, sales)!, /Only a line or an area is forecast/)
+  assert.match(chartProblem({ type: "line", x: "month", y: ["sales"], analytics: { forecast: 99 } }, sales)!, /1 to 24/)
+  assert.match(chartProblem({ type: "pie", x: "region", y: ["sales"], analytics: { average: true } }, sales)!, /no analytics/)
+  assert.match(chartProblem({ type: "scatter", x: "goal", y: ["sales"], analytics: { median: true } }, sales)!, /trend line and a constant/)
+  assert.equal(chartProblem({ type: "scatter", x: "goal", y: ["sales"], analytics: { trend: true, constant: 15 } }, sales), null)
+  assert.match(chartProblem({ type: "bar", x: "month", y: ["sales", "goal"], stacked: true, analytics: { average: true } }, sales)!, /unstack/)
+  assert.equal(chartProblem({ type: "bar", x: "month", y: ["sales", "goal"], stacked: true, analytics: { constant: 20 } }, sales), null)
+
+  assert.equal(chartProblem({ type: "bar", x: "year", y: ["sales"], levels: ["month"] }, sales), null)
+  assert.match(chartProblem({ type: "bar", x: "year", y: ["sales"], levels: ["year"] }, sales)!, /different columns/)
+  assert.match(chartProblem({ type: "funnel", x: "year", y: ["sales"], levels: ["month"] }, sales)!, /cannot be drilled/)
+  assert.match(chartProblem({ type: "bar", x: "year", y: ["sales"], levels: ["nope"] }, sales)!, /No column named "nope"/)
+
+  assert.equal(chartProblem({ type: "line", x: "month", y: ["sales"], facet: "region" }, sales), null)
+  assert.match(chartProblem({ type: "line", x: "month", y: ["sales"], facet: "region", series: "year" }, sales)!, /not both/)
+  assert.match(chartProblem({ type: "pie", x: "month", y: ["sales"], facet: "region" }, sales)!, /small multiples/)
+
+  assert.equal(chartProblem({ type: "table", x: null, y: [], rules: [{ column: "sales", kind: "bars" }] }, sales), null)
+  assert.match(chartProblem({ type: "table", x: null, y: [], rules: [{ column: "region", kind: "bars" }] }, sales)!, /not numeric/)
+  assert.match(chartProblem({ type: "bar", x: "month", y: ["sales"], rules: [{ column: "sales", kind: "bars" }] }, sales)!, /table or a pivot/)
+})
+
+await check("chart: fits, averages, anomalies and forecasts", () => {
+  const fit = fitSeries([1, 3, null, 7, 9])!
+  assert.ok(Math.abs(fit.slope - 2) < 1e-9 && Math.abs(fit.intercept - 1) < 1e-9 && fit.sigma < 1e-9)
+  assert.equal(fitSeries([5]), null)
+  assert.equal(mean([1, null, 2, 6]), 3)
+  assert.equal(median([5, 1, null, 3]), 3)
+  assert.equal(median([4, 1, 3, 2]), 2.5)
+  assert.equal(median([null]), null)
+  assert.deepEqual(anomalies([10, 11, 12, 13, 50, 15, 16, 17]).map(Number), [0, 0, 0, 0, 1, 0, 0, 0])
+  assert.deepEqual(anomalies([1, 2, 30]), [false, false, false])
+  const ahead = forecast([10, 20, 30, null], 2)!
+  assert.deepEqual(ahead.map((step) => Math.round(step.value)), [50, 60])
+  assert.ok(ahead.every((step) => step.low <= step.value && step.high >= step.value))
+  assert.equal(forecast([1, 2], 3), null)
+})
+
+await check("chart: the periods after the last are named", () => {
+  assert.deepEqual(nextLabels(["2025-11", "2025-12"], 3), ["2026-01", "2026-02", "2026-03"])
+  assert.deepEqual(nextLabels(["2025-Q3", "2025-Q4"], 2), ["2026-Q1", "2026-Q2"])
+  assert.deepEqual(nextLabels(["2026-01-01", "2026-01-08"], 2), ["2026-01-15", "2026-01-22"])
+  assert.deepEqual(nextLabels(["2024", "2025"], 2), ["2026", "2027"])
+  assert.deepEqual(nextLabels(["north", "south"], 2), ["+1", "+2"])
+})
+
+await check("chart: a drill level is the rows under the path, summed", () => {
+  const sales = {
+    columns: [txt("year"), txt("quarter"), txt("region"), num("sales")],
+    rows: [
+      ["2025", "Q1", "north", "10"],
+      ["2025", "Q1", "south", "5"],
+      ["2025", "Q2", "north", "7"],
+      ["2026", "Q1", "north", "1.1"],
+      ["2026", "Q1", "north", "2.2"],
+      ["2026", "Q2", "north", null],
+    ],
+  }
+  assert.deepEqual(rollUp(sales, [], ["year"], ["sales"]).rows, [["2025", "22"], ["2026", "3.3"]])
+  const quarters = rollUp(sales, [["year", "2025"]], ["quarter"], ["sales"])
+  assert.deepEqual(quarters.columns.map((column) => column.name), ["quarter", "sales"])
+  assert.deepEqual(quarters.rows, [["Q1", "15"], ["Q2", "7"]])
+  assert.deepEqual(rollUp(sales, [["year", "2026"]], ["quarter", "region"], ["sales"]).rows, [
+    ["Q1", "north", "3.3"],
+    ["Q2", "north", null],
+  ])
+})
+
+await check("chart: parts sum, sort, drop the empty and fold the tail", () => {
+  const sales = {
+    columns: [txt("region"), num("sales")],
+    rows: [["a", "5"], ["b", "40"], ["a", "10"], ["c", "0"], ["d", "30"], [null, "3"], ["e", null], ["f", "2"]],
+  }
+  assert.deepEqual(parts(sales, "region", "sales", 6), [
+    { raw: "b", value: 40, other: false },
+    { raw: "d", value: 30, other: false },
+    { raw: "a", value: 15, other: false },
+    { raw: null, value: 3, other: false },
+    { raw: "f", value: 2, other: false },
+  ])
+  assert.deepEqual(parts(sales, "region", "sales", 3), [
+    { raw: "b", value: 40, other: false },
+    { raw: "d", value: 30, other: false },
+    { raw: "Other", value: 20, other: true },
+  ])
+})
+
+await check("chart: a treemap's rectangles tile the box with their values' areas", () => {
+  const values = [6, 6, 4, 3, 2, 2, 1]
+  const box = { x: 0, y: 0, w: 600, h: 400 }
+  const boxes = squarify(values, box)
+  const total = values.reduce((sum, value) => sum + value, 0)
+  boxes.forEach((rect, index) => {
+    assert.ok(Math.abs(rect.w * rect.h - (values[index]! / total) * 600 * 400) < 1e-6)
+    assert.ok(rect.x >= -1e-9 && rect.y >= -1e-9)
+    assert.ok(rect.x + rect.w <= 600 + 1e-9 && rect.y + rect.h <= 400 + 1e-9)
+  })
+  // No two overlap.
+  for (let a = 0; a < boxes.length; a++) {
+    for (let b = a + 1; b < boxes.length; b++) {
+      const [p, q] = [boxes[a]!, boxes[b]!]
+      const overlap =
+        Math.min(p.x + p.w, q.x + q.w) - Math.max(p.x, q.x) > 1e-6 &&
+        Math.min(p.y + p.h, q.y + q.h) - Math.max(p.y, q.y) > 1e-6
+      assert.ok(!overlap, `${a} and ${b} overlap`)
+    }
+  }
+  // Near square: none thinner than 1 to 4 here.
+  for (const rect of boxes) assert.ok(Math.max(rect.w / rect.h, rect.h / rect.w) < 4)
+  assert.deepEqual(squarify([], box), [])
 })
 
 // ── Dashboard tools ────────────────────────────────────────────────────────

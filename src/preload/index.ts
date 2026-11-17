@@ -53,6 +53,7 @@ const api: DesktopApi = {
   listAudit: () => ipcRenderer.invoke(IPC.listAudit),
   clearAudit: () => ipcRenderer.invoke(IPC.clearAudit),
   pinToDashboard: (input) => ipcRenderer.invoke(IPC.pinToDashboard, input),
+  exportDashboard: (input) => ipcRenderer.invoke(IPC.exportDashboard, input),
 
   listSkills: () => ipcRenderer.invoke(IPC.listSkills),
   saveSkill: (input) => ipcRenderer.invoke(IPC.saveSkill, input),

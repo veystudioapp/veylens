@@ -452,15 +452,21 @@ export type PlanStepResult = {
  * two dimensions, `table` the rows with numbers shaded by size. `scatter` is
  * one measure against another, a dot per row; `funnel` ordered steps and how
  * many are left at each; `waterfall` a starting figure, the changes that move
- * it, and where it ends; `progress` a figure against its target. No pie, no
- * second axis: see the chart component for why.
+ * it, and where it ends; `progress` a figure against its target. `pie` and
+ * `donut` are a few parts of one whole, `treemap` many parts as nested
+ * rectangles, `combo` columns with one measure of another unit as a line on
+ * a second axis — the one chart with two.
  */
 export const CHART_TYPES = [
   "bar",
   "hbar",
   "line",
   "area",
+  "combo",
   "scatter",
+  "pie",
+  "donut",
+  "treemap",
   "funnel",
   "waterfall",
   "stat",
@@ -477,7 +483,8 @@ export type ChartSpec = {
   /**
    * The column along the category or time axis — the rows of a pivot, the
    * period of a KPI's trend, a funnel's steps, a waterfall's changes, the
-   * horizontal measure of a scatter; null for `stat`, `table`, a one-row KPI
+   * parts of a pie or a treemap, the horizontal measure of a scatter; null
+   * for `stat`, `table`, a one-row KPI
    * and a one-row progress.
    */
   x: string | null
@@ -491,6 +498,12 @@ export type ChartSpec = {
   series?: string | null
   /** Bars of several series on top of each other rather than side by side. */
   stacked?: boolean
+  /** Stacked to 100%: each series as its share of the category's total. */
+  percent?: boolean
+  /** For a combo: the column drawn as a line, on its own axis on the right. */
+  line?: string | null
+  /** For a scatter: the column sizing each dot by area — a bubble chart. */
+  size?: string | null
   /** For a one-row KPI: the column holding the previous period's value. */
   compare?: string | null
   /** For a progress: the column holding the target `y[0]` is measured against. */
@@ -498,7 +511,44 @@ export type ChartSpec = {
   /** For a KPI, a progress and a waterfall: whether a rise is good news. True
    * unless said otherwise. */
   upIsGood?: boolean
+  /** Lines and marks worked out from the plotted values themselves. */
+  analytics?: ChartAnalytics
+  /**
+   * Finer columns under x, coarse to fine — year, then quarter, then month:
+   * clicking a category drills into it, its values summed at the next level.
+   */
+  levels?: string[]
+  /** A column whose values each get a small chart of their own, on one scale. */
+  facet?: string | null
+  /** For a table and a pivot: how cells are marked beyond their shading. */
+  rules?: CellRule[]
 }
+
+/** Power BI's analytics pane: what is drawn over a chart from its own data. */
+export type ChartAnalytics = {
+  /** A dashed line at each series' mean. */
+  average?: boolean
+  /** A dotted line at each series' median. */
+  median?: boolean
+  /** A straight line fitted to each series by least squares. */
+  trend?: boolean
+  /** Periods continued along the fitted line, with the range it is likely in. */
+  forecast?: number
+  /** Points ringed where they lie more than two standard deviations off the fit. */
+  anomalies?: boolean
+  /** A fixed value drawn across the plot: a goal, a limit. */
+  constant?: number | null
+  constantLabel?: string | null
+}
+
+export const ANALYTIC_TYPES = new Set<ChartType>(["bar", "line", "area", "combo", "scatter"])
+
+/** A table's or a pivot's cell marked by its value: a bar in the cell, an
+ * arrow by its sign, or a colour past a threshold. */
+export type CellRule =
+  | { column: string; kind: "bars" }
+  | { column: string; kind: "icons"; upIsGood?: boolean }
+  | { column: string; kind: "above" | "below"; value: number; tone: "good" | "bad" }
 
 /** Series past this fold into the table view; no ninth colour is invented. */
 export const MAX_SERIES = 8
@@ -1235,6 +1285,9 @@ export type DesktopApi = {
   listAudit(): Promise<AuditEntry[]>
   clearAudit(): Promise<void>
   pinToDashboard(input: PinInput): Promise<Dashboard>
+  /** A dashboard as the page draws it, saved where the user picks as a PDF
+   * or a PNG. False when they cancel. */
+  exportDashboard(input: DashboardExport): Promise<boolean>
 
   listSkills(): Promise<Skill[]>
   saveSkill(input: SkillInput): Promise<Skill>
@@ -1312,6 +1365,15 @@ export type DesktopApi = {
   onUpdateProgress(listener: (event: UpdateProgress) => void): () => void
 }
 
+/** A standalone page of a dashboard, its size in CSS pixels. */
+export type DashboardExport = {
+  html: string
+  width: number
+  height: number
+  title: string
+  format: "pdf" | "png"
+}
+
 export type UpdateCheck =
   | { status: "current"; current: string }
   | {
@@ -1369,6 +1431,7 @@ export const IPC = {
   listAudit: "audit:list",
   clearAudit: "audit:clear",
   pinToDashboard: "dashboards:pin",
+  exportDashboard: "dashboards:export",
   listSkills: "skills:list",
   saveSkill: "skills:save",
   deleteSkill: "skills:delete",

@@ -56,12 +56,16 @@ export const BUILTIN_SKILLS: BuiltinSkill[] = [
     name: "Choose a chart",
     description:
       "Before drawing a chart with show_chart or adding a chart tile, to pick its form.",
-    instructions: `- **line** for change over time; **bar** for a few categories; **hbar** for ranked or part-to-whole (there is no pie); **stat** for a single figure.
+    instructions: `- **line** for change over time; **bar** for a few categories; **hbar** for ranked parts or many categories; **stat** for a single figure.
+- One whole split into a few parts (≤ 6), read at a glance, is a **donut** (or **pie**); many parts of a whole is a **treemap**; parts to compare or rank stay **hbar**.
+- How a mix changes across periods or categories is a **bar** or **area** with **percent** (100% stacked).
 - A headline figure with its change is a **kpi**; against a goal or a budget, a **progress** (with target); a figure by two dimensions is a **pivot**.
 - Ordered steps people drop out of (visit → signup → order) are a **funnel**; a figure going from one value to another through its parts (last month + new − churn = this month) is a **waterfall**.
-- Whether two measures move together (price and quantity, per customer or per product) is a **scatter**.
-- A result in long form (GROUP BY month, channel) is drawn with **series** rather than reshaped in SQL.
-- One unit per chart: two measures of different scale are two charts.
+- Whether two measures move together (price and quantity, per customer or per product) is a **scatter**; a third measure as the dots' size makes it a bubble chart (**size**).
+- A result in long form (GROUP BY month, channel) is drawn with **series** rather than reshaped in SQL; the same measure for each of many groups, to compare their shapes, is **facet** (small multiples).
+- A hierarchy (year → quarter → month, region → city) is **levels** under x: return the finest grain with every level as a column, and the viewer drills in.
+- Over a trend, **analytics**: an average or a constant goal line, a trend line, anomalies, or a forecast when asked what comes next. On a table, **rules** mark cells: data bars, arrows by sign, a threshold in the good or bad colour.
+- One unit per chart: two measures of different scale are two charts — unless the user asks for them together, when a **combo** draws the second as a line on a right-hand axis.
 - Aggregate in SQL first.`,
   },
 ]
