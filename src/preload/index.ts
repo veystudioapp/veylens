@@ -130,6 +130,13 @@ const api: DesktopApi = {
       ipcRenderer.off(IPC.updateProgress, handler)
     }
   },
+  onCloseTab: (listener) => {
+    const handler = () => listener()
+    ipcRenderer.on(IPC.closeTab, handler)
+    return () => {
+      ipcRenderer.off(IPC.closeTab, handler)
+    }
+  },
 }
 
 contextBridge.exposeInMainWorld("veylens", api)

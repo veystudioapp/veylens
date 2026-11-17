@@ -33,6 +33,14 @@ export function App() {
   useEffect(() => {
     void init()
   }, [init])
+  useEffect(
+    () =>
+      window.veylens.onCloseTab(() => {
+        const { activeTabId, closeTab } = useStore.getState()
+        if (activeTabId) closeTab(activeTabId)
+      }),
+    []
+  )
   useUpdateWatch()
   useGatewayWatch()
 

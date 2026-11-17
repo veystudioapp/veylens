@@ -1477,6 +1477,9 @@ export type DesktopApi = {
    */
   installUpdate(version: string): Promise<void>
   onUpdateProgress(listener: (event: UpdateProgress) => void): () => void
+  /** Cmd/Ctrl+W: the main process takes it from the window menu and asks the
+   * page to close its active tab instead. */
+  onCloseTab(listener: () => void): () => void
 }
 
 /** A standalone page of a dashboard, its size in CSS pixels. */
@@ -1588,4 +1591,5 @@ export const IPC = {
   checkForUpdate: "update:check",
   installUpdate: "update:install",
   updateProgress: "update:progress",
+  closeTab: "window:close-tab",
 } as const

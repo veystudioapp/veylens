@@ -87,6 +87,21 @@ function createWindow(): void {
     if (url !== mainWindow?.webContents.getURL()) event.preventDefault()
   })
 
+  // Cmd/Ctrl+W closes the active tab, not the window: the default menu's
+  // Close Window would otherwise take it and, off macOS, quit the app.
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (
+      input.type === "keyDown" &&
+      (input.meta || input.control) &&
+      !input.shift &&
+      !input.alt &&
+      input.key.toLowerCase() === "w"
+    ) {
+      event.preventDefault()
+      mainWindow?.webContents.send(IPC.closeTab)
+    }
+  })
+
   const devUrl = process.env.VITE_DEV_SERVER_URL
   if (devUrl) void mainWindow.loadURL(devUrl)
   else {
