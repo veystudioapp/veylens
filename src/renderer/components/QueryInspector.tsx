@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react"
 import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useDefaultLayout } from "react-resizable-panels"
 
 import type { GatewayQuery, QueryResult } from "@shared/api"
 import {
@@ -31,6 +32,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 import { Spinner } from "@/components/ui/spinner"
 import { formatSql } from "@/lib/format-sql"
 import { useGateway } from "@/lib/gateway"
@@ -65,32 +67,20 @@ const speedTone = (ms: number) => (ms >= SLOW_MS * 10 ? "red" : ms >= SLOW_MS ? 
 /** A statement as it can be run again: Postgres values written in. */
 const runnable = (query: GatewayQuery) => inlinePostgresParams(query.sql, query.params) ?? query.sql
 
+/** A number to read, not a control: the views are switched by the tabs below. */
 function Stat({
   icon,
   label,
   value,
   tone,
-  active,
-  onClick,
 }: {
   icon: ReactNode
   label: string
   value: string
   tone?: Parameters<typeof toneColor>[0]
-  active?: boolean
-  onClick?: () => void
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!onClick}
-      className={cn(
-        "flex min-w-0 flex-1 items-center gap-2.5 rounded-lg border bg-card px-3 py-2 text-left transition-colors",
-        onClick && "hover:border-foreground/20",
-        active && "border-foreground/30 shadow-xs"
-      )}
-    >
+    <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg border bg-card px-3 py-2">
       <span className="[&_svg]:size-4" style={{ color: tone ? toneColor(tone) : "var(--muted-foreground)" }}>
         {icon}
       </span>
@@ -102,6 +92,47 @@ function Stat({
           {value}
         </span>
         <span className="block truncate text-[11px] text-muted-foreground">{label}</span>
+      </span>
+    </div>
+  )
+}
+
+/** One of the list's views, with how many it holds. */
+function ViewTab({
+  label,
+  count,
+  tone,
+  active,
+  onClick,
+}: {
+  label: string
+  count: number
+  /** For a count that is a problem: drawn in this colour when not zero. */
+  tone?: Parameters<typeof toneColor>[0]
+  active: boolean
+  onClick: () => void
+}) {
+  const alarm = tone && count > 0
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "flex items-center gap-1.5 rounded px-2 py-0.5 text-xs transition-colors",
+        active ? "bg-background font-medium text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {label}
+      <span
+        className={cn(
+          "min-w-4 rounded px-1 text-center text-[10.5px] leading-4 tabular-nums",
+          alarm ? "text-white" : "bg-muted-foreground/15 text-muted-foreground"
+        )}
+        style={alarm ? { background: toneColor(tone) } : undefined}
+      >
+        {count.toLocaleString()}
       </span>
     </button>
   )
@@ -242,37 +273,117 @@ function GroupedList({
   )
 }
 
+type IssueKind = "all" | "bursts" | "slow"
+
+/** The issues tab: N+1 bursts and slow statements, both or either. */
 function IssueList({
+  kind,
+  onKind,
   bursts,
   slow,
+  filtered,
+  selected,
+  onSelect,
+  onAsk,
+  onShowBurst,
+}: {
+  kind: IssueKind
+  onKind: (kind: IssueKind) => void
+  bursts: NPlusOne[]
+  slow: GatewayQuery[]
+  /** Set when a search left some out, to say so rather than "none". */
+  filtered: boolean
+  selected: number | null
+  onSelect: (query: GatewayQuery) => void
+  onAsk: (burst: NPlusOne) => void
+  onShowBurst: (burst: NPlusOne) => void
+}) {
+  const showBursts = kind !== "slow" && bursts.length > 0
+  const showSlow = kind !== "bursts" && slow.length > 0
+  const what = { all: "No N+1 bursts and nothing slow", bursts: "No N+1 bursts", slow: "Nothing slow" }[kind]
+  const chips: { kind: IssueKind; label: string; count: number; tone?: "red" | "amber" }[] = [
+    { kind: "all", label: "All", count: bursts.length + slow.length },
+    { kind: "bursts", label: "N+1", count: bursts.length, tone: "red" },
+    { kind: "slow", label: `Slow >${SLOW_MS} ms`, count: slow.length, tone: "amber" },
+  ]
+  return (
+    <div className="flex min-h-full flex-col">
+      <div role="radiogroup" aria-label="Show" className="flex flex-wrap gap-1.5 px-4 pt-3">
+        {chips.map((chip) => {
+          const on = kind === chip.kind
+          return (
+            <button
+              key={chip.kind}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              onClick={() => onKind(chip.kind)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs transition-colors",
+                on ? "border-foreground/25 bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {chip.tone && (
+                <span className="size-1.5 rounded-full" style={{ background: toneColor(chip.count ? chip.tone : "green") }} />
+              )}
+              {chip.label}
+              <span className="tabular-nums">{chip.count.toLocaleString()}</span>
+            </button>
+          )
+        })}
+      </div>
+      {!showBursts && !showSlow ? (
+        <EmptyState icon={<Gauge />}>
+          {filtered
+            ? `${what} matches the filter.`
+            : `${what} among what has been seen. Use the app and look again.`}
+        </EmptyState>
+      ) : (
+        <div className="flex flex-col gap-5 p-4">
+          {showBursts && (
+            <section className="flex flex-col gap-2">
+              {kind === "all" && (
+                <h3 className="flex items-center gap-1.5 text-[13px] font-semibold">
+                  <Repeat className="size-3.5" style={{ color: toneColor("red") }} />
+                  N+1 · {bursts.length}
+                </h3>
+              )}
+              <BurstList bursts={bursts} selected={selected} onSelect={onSelect} onAsk={onAsk} onShowBurst={onShowBurst} />
+            </section>
+          )}
+          {showSlow && (
+            <section className="flex flex-col gap-2">
+              {kind === "all" && (
+                <h3 className="flex items-center gap-1.5 text-[13px] font-semibold">
+                  <Timer className="size-3.5" style={{ color: toneColor("amber") }} />
+                  Slower than {SLOW_MS} ms · {slow.length}
+                </h3>
+              )}
+              <SlowList slow={slow} selected={selected} onSelect={onSelect} />
+            </section>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The N+1 bursts: one statement run again and again on one connection. */
+function BurstList({
+  bursts,
   selected,
   onSelect,
   onAsk,
   onShowBurst,
 }: {
   bursts: NPlusOne[]
-  slow: GatewayQuery[]
   selected: number | null
   onSelect: (query: GatewayQuery) => void
   onAsk: (burst: NPlusOne) => void
   onShowBurst: (burst: NPlusOne) => void
 }) {
-  if (!bursts.length && !slow.length) {
-    return (
-      <EmptyState icon={<Gauge />}>
-        No N+1 bursts and nothing slower than {SLOW_MS} ms among what has been seen. Use the app
-        and look again.
-      </EmptyState>
-    )
-  }
   return (
-    <div className="flex flex-col gap-5 p-4">
-      {bursts.length > 0 && (
-        <section className="flex flex-col gap-2">
-          <h3 className="flex items-center gap-1.5 text-[13px] font-semibold">
-            <Repeat className="size-3.5" style={{ color: toneColor("red") }} />
-            N+1 · {bursts.length}
-          </h3>
+    <div className="flex flex-col gap-2">
           {bursts.map((burst) => (
             <div key={`${burst.session}-${burst.queries[0]!.id}`} className="rounded-lg border bg-card p-3">
               <div className="flex items-baseline gap-2">
@@ -329,14 +440,22 @@ function IssueList({
               </div>
             </div>
           ))}
-        </section>
-      )}
-      {slow.length > 0 && (
-        <section className="flex flex-col gap-2">
-          <h3 className="flex items-center gap-1.5 text-[13px] font-semibold">
-            <Timer className="size-3.5" style={{ color: toneColor("amber") }} />
-            Slower than {SLOW_MS} ms · {slow.length}
-          </h3>
+    </div>
+  )
+}
+
+/** Statements slower than {@link SLOW_MS}, slowest first. */
+function SlowList({
+  slow,
+  selected,
+  onSelect,
+}: {
+  slow: GatewayQuery[]
+  selected: number | null
+  onSelect: (query: GatewayQuery) => void
+}) {
+  return (
+    <div>
           <div className="overflow-hidden rounded-lg border bg-card">
             {slow.slice(0, 50).map((query) => (
               <button
@@ -358,8 +477,11 @@ function IssueList({
               </button>
             ))}
           </div>
-        </section>
-      )}
+          {slow.length > 50 && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              The slowest 50 of {slow.length.toLocaleString()}. Filter by SQL to find the rest.
+            </p>
+          )}
     </div>
   )
 }
@@ -530,8 +652,15 @@ export function QueryInspector({ tab }: { tab: QueriesTab; active: boolean }) {
 
   const [queries, setQueries] = useState<GatewayQuery[]>([])
   const [view, setView] = useState<View>("live")
+  const [issueKind, setIssueKind] = useState<IssueKind>("all")
   const [search, setSearch] = useState("")
   const [selected, setSelected] = useState<GatewayQuery | null>(null)
+  /** The list's and the statement's widths, kept from one opening to the next. */
+  const layout = useDefaultLayout({
+    id: "query-inspector-split",
+    panelIds: selected ? ["list", "detail"] : ["list"],
+    storage: localStorage,
+  })
   /** The live list narrowed to one burst. */
   const [burst, setBurst] = useState<{ ids: Set<number>; label: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -572,6 +701,29 @@ export function QueryInspector({ tab }: { tab: QueriesTab; active: boolean }) {
   const groups = useMemo(() => groupQueries(filtered), [filtered])
   const slow = useMemo(() => slowQueries(queries, SLOW_MS), [queries])
   const distinct = useMemo(() => new Set(queries.map((query) => fingerprint(query.sql))).size, [queries])
+  /** The N+1 and slow tabs, narrowed by the same search as the others. */
+  const shownSlow = useMemo(
+    () => (needle ? slow.filter((query) => query.sql.toLowerCase().includes(needle)) : slow),
+    [slow, needle]
+  )
+  const shownBursts = useMemo(
+    () =>
+      needle
+        ? bursts.filter(
+            (item) =>
+              item.queries[0]!.sql.toLowerCase().includes(needle) ||
+              !!item.trigger?.sql.toLowerCase().includes(needle)
+          )
+        : bursts,
+    [bursts, needle]
+  )
+  /** Whether the tab shown is one a burst's "Show them" narrows. */
+  const narrowed = view === "live" || view === "grouped"
+  const matches = {
+    live: filtered.length,
+    grouped: groups.length,
+    issues: (issueKind !== "slow" ? shownBursts.length : 0) + (issueKind !== "bursts" ? shownSlow.length : 0),
+  }[view]
   const groupOf = (query: GatewayQuery) => groups.find((group) => group.fingerprint === fingerprint(query.sql))
 
   const totalMs = queries.reduce((sum, query) => sum + query.ms, 0)
@@ -643,24 +795,11 @@ export function QueryInspector({ tab }: { tab: QueriesTab; active: boolean }) {
       {error && <ErrorNote className="m-2">{error}</ErrorNote>}
 
       <div className="flex shrink-0 gap-2 border-b bg-muted/30 p-2.5 dark:bg-background">
-        <Stat icon={<Activity />} label="statements" value={queries.length.toLocaleString()} active={view === "live"} onClick={() => setView("live")} />
-        <Stat icon={<Layers />} label="distinct" value={distinct.toLocaleString()} active={view === "grouped"} onClick={() => setView("grouped")} />
+        <Stat icon={<Activity />} label="statements" value={queries.length.toLocaleString()} />
+        <Stat icon={<Layers />} label="distinct" value={distinct.toLocaleString()} />
         <Stat icon={<Timer />} label="in the database" value={duration(totalMs)} />
-        <Stat
-          icon={<Repeat />}
-          label="N+1 bursts"
-          value={String(bursts.length)}
-          tone={bursts.length ? "red" : "green"}
-          active={view === "issues"}
-          onClick={() => setView("issues")}
-        />
-        <Stat
-          icon={<Gauge />}
-          label={`over ${SLOW_MS} ms`}
-          value={String(slow.length)}
-          tone={slow.length ? "amber" : "green"}
-          onClick={() => setView("issues")}
-        />
+        <Stat icon={<Repeat />} label="N+1 bursts" value={String(bursts.length)} tone={bursts.length ? "red" : "green"} />
+        <Stat icon={<Gauge />} label={`over ${SLOW_MS} ms`} value={String(slow.length)} tone={slow.length ? "amber" : "green"} />
         <Stat icon={<CircleAlert />} label="errors" value={String(errors)} tone={errors ? "red" : "green"} />
       </div>
 
@@ -673,54 +812,57 @@ export function QueryInspector({ tab }: { tab: QueriesTab; active: boolean }) {
               : "Paused: nothing is being kept."}
         </EmptyState>
       ) : (
-        <div className="flex min-h-0 flex-1">
-          <div className="flex min-w-0 flex-1 flex-col">
-            {view !== "issues" && (
-              <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
-                <div className="flex rounded-md border p-0.5">
-                  {(["live", "grouped"] as const).map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      onClick={() => setView(item)}
-                      className={cn(
-                        "rounded px-2 py-0.5 text-xs",
-                        view === item ? "bg-muted font-medium" : "text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      {item === "live" ? "Live" : "Grouped"}
-                    </button>
-                  ))}
-                </div>
-                <div className="relative w-56">
-                  <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Filter by SQL…"
-                    aria-label="Filter by SQL"
-                    spellCheck={false}
-                    className="h-7 pl-7 text-xs shadow-none md:text-xs"
-                  />
-                </div>
-                {burst && (
-                  <span className="flex items-center gap-1 rounded-full border bg-background py-0.5 pr-0.5 pl-2 text-[11px]">
-                    {burst.label}
-                    <IconButton label="Show everything" onClick={() => setBurst(null)}>
-                      <X />
-                    </IconButton>
-                  </span>
-                )}
-                <span className="flex-1" />
-                <span className="text-[11px] text-muted-foreground tabular-nums">
-                  {view === "live"
-                    ? filtered.length > LIVE_ROWS
-                      ? `latest ${LIVE_ROWS} of ${filtered.length.toLocaleString()}`
-                      : `${filtered.length.toLocaleString()}`
-                    : `${groups.length} distinct`}
-                </span>
+        <ResizablePanelGroup
+          orientation="horizontal"
+          defaultLayout={layout.defaultLayout}
+          onLayoutChanged={layout.onLayoutChanged}
+          className="min-h-0 flex-1"
+        >
+          <ResizablePanel id="list" minSize={360} className="flex min-w-0 flex-col">
+            <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+              <div role="tablist" aria-label="View" className="flex gap-0.5 rounded-md bg-muted p-0.5">
+                <ViewTab label="Live" count={queries.length} active={view === "live"} onClick={() => setView("live")} />
+                <ViewTab label="Grouped" count={distinct} active={view === "grouped"} onClick={() => setView("grouped")} />
+                <ViewTab
+                  label="Issues"
+                  count={bursts.length + slow.length}
+                  tone={bursts.length ? "red" : "amber"}
+                  active={view === "issues"}
+                  onClick={() => setView("issues")}
+                />
               </div>
-            )}
+                  <div className="relative w-56 min-w-0">
+                    <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                      placeholder="Filter by SQL…"
+                      aria-label="Filter by SQL"
+                      spellCheck={false}
+                      className="h-7 pl-7 text-xs shadow-none md:text-xs"
+                    />
+                  </div>
+                  {/* One burst's statements, from its "Show them": only the
+                      lists of every statement are narrowed to it. */}
+                  {burst && narrowed && (
+                    <span className="flex shrink-0 items-center gap-1 rounded-full border bg-background py-0.5 pr-0.5 pl-2 text-[11px]">
+                      {burst.label}
+                      <IconButton label="Show everything" onClick={() => setBurst(null)}>
+                        <X />
+                      </IconButton>
+                    </span>
+                  )}
+                  <span className="flex-1" />
+                  {/* The tabs carry the totals; this says only what a filter or
+                      the row limit leaves out. */}
+                  <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                    {view === "live" && filtered.length > LIVE_ROWS
+                      ? `latest ${LIVE_ROWS} of ${filtered.length.toLocaleString()}`
+                      : needle || (burst && narrowed)
+                        ? `${matches.toLocaleString()} match`
+                        : ""}
+                  </span>
+            </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {view === "live" && (
                 <LiveList queries={filtered} repeated={repeated} selected={selected?.id ?? null} onSelect={setSelected} />
@@ -728,8 +870,11 @@ export function QueryInspector({ tab }: { tab: QueriesTab; active: boolean }) {
               {view === "grouped" && <GroupedList groups={groups} selected={selected?.id ?? null} onSelect={setSelected} />}
               {view === "issues" && (
                 <IssueList
-                  bursts={bursts}
-                  slow={slow}
+                  kind={issueKind}
+                  onKind={setIssueKind}
+                  bursts={shownBursts}
+                  slow={shownSlow}
+                  filtered={!!needle}
                   selected={selected?.id ?? null}
                   onSelect={setSelected}
                   onAsk={askBurst}
@@ -743,13 +888,16 @@ export function QueryInspector({ tab }: { tab: QueriesTab; active: boolean }) {
                 />
               )}
             </div>
-          </div>
+          </ResizablePanel>
           {selected && (
-            <div className="w-[400px] shrink-0 border-l">
-              <Detail query={selected} group={groupOf(selected)} onClose={() => setSelected(null)} onAsk={askQuery} />
-            </div>
+            <>
+              <ResizableHandle />
+              <ResizablePanel id="detail" defaultSize={400} minSize={300} maxSize="75%">
+                <Detail query={selected} group={groupOf(selected)} onClose={() => setSelected(null)} onAsk={askQuery} />
+              </ResizablePanel>
+            </>
           )}
-        </div>
+        </ResizablePanelGroup>
       )}
     </div>
   )
