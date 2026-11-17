@@ -1,7 +1,10 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 
+import { alertFires, describeCondition, describeInterval, readAlertValue } from "../shared/alerts"
 import {
+  ALERT_CONDITIONS,
+  ALERT_INTERVALS,
   CHART_TYPES,
   DATE_PRESETS,
   FILTER_KINDS,
@@ -28,6 +31,7 @@ import {
   filterValues,
   hasParameters,
 } from "../shared/params"
+import type { Alerts } from "./alerts"
 import type { Connections } from "./connections"
 import { assertReadOnly } from "./db/sql"
 import type { Library } from "./library"
@@ -47,6 +51,8 @@ export const APPROVAL_TOOLS = new Set([
   "append_note",
   "remove_from_dashboard",
   "delete_dashboard",
+  "save_alert",
+  "delete_alert",
 ])
 
 /**
@@ -77,6 +83,8 @@ export type ChartItem = Omit<Extract<ChatItem, { kind: "chart" }>, "id" | "kind"
 export type ToolHost = {
   connections: Connections
   library: Library
+  /** Absent where alerts are not kept: the alert tools say so. */
+  alerts?: Alerts
   /**
    * Whether the user approved exactly this call, used up by asking. The
    * approval card is raised by the CLI's permission prompt; this is the lock
@@ -486,6 +494,27 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
       )
     }
     return parts.join("\n\n")
+  }
+
+  const alertStore = () => {
+    if (!host.alerts) throw new Error("Alerts are not available here.")
+    return host.alerts
+  }
+  const alertsOf = (target: Connection) =>
+    alertStore().list().filter((alert) => alert.connectionId === target.id)
+  /** By id, or by name within the connection. */
+  const alertOf = (target: Connection, reference: string) => {
+    const mine = alertsOf(target)
+    const needle = reference.trim().toLowerCase()
+    const found =
+      mine.find((alert) => alert.id === reference.trim()) ??
+      mine.find((alert) => alert.name.trim().toLowerCase() === needle)
+    if (!found) {
+      throw new Error(
+        `No alert "${reference}" on ${target.name}. Its alerts: ${mine.map((alert) => `"${alert.name}"`).join(", ") || "none"}.`
+      )
+    }
+    return found
   }
 
   /** Refuses a call the user did not approve; see `ToolHost.takeGrant`. */
@@ -1173,6 +1202,138 @@ export function dbToolDefinitions(host: ToolHost, scope: ToolScope = "chat") {
             const dashboard = dashboardOf(target, args.dashboard)
             host.library.deleteDashboard(dashboard.id)
             return ok(`Deleted the dashboard "${dashboard.title}".`)
+          } catch (error) {
+            return fail(error)
+          }
+        },
+        { alwaysLoad: true }
+      ),
+
+      tool(
+        "list_alerts",
+        "The user's alerts on a connection: for each, its id, name, the query whose number it watches, when it fires, how often it is checked, whether it is on, and how it stood at its last check (the number read, within bounds or fired, or the error). Read it before changing or deleting an alert, or when asked what is being watched.",
+        { connection },
+        async (args) => {
+          try {
+            const target = resolve(args.connection)
+            const alerts = alertsOf(target)
+            if (alerts.length === 0) return ok(`No alerts on ${target.name} yet.`)
+            const guard = host.connections.assistantDriver(target.id)
+            const lines = await Promise.all(
+              alerts.map(async (alert) => {
+                // A number read as the user, from data the assistant may not
+                // read, is not handed over by the back door.
+                const refused = (await guard.refusals(alert.sql)).length > 0
+                const { state } = alert
+                const when = (time: number | null) => (time ? new Date(time).toISOString() : "never")
+                const standing = !alert.enabled
+                  ? "off"
+                  : state.status === "pending"
+                    ? "not checked yet"
+                    : state.status === "error"
+                      ? `could not be checked at ${when(state.checkedAt)}: ${state.error}`
+                      : `${state.status === "triggered" ? "FIRED" : "within bounds"} at its last check, ${when(state.checkedAt)}` +
+                        (refused ? " (the number is withheld: it reads data you may not read)" : `, reading ${state.value}`) +
+                        (state.triggeredAt ? `; last fired ${when(state.triggeredAt)}` : "")
+                return `- "${alert.name}" (id ${alert.id}): fires when it ${describeCondition(alert.condition, alert.threshold)}, checked ${describeInterval(alert.everyMinutes)}; ${standing}\n  \`\`\`sql\n  ${alert.sql.replace(/\n/g, "\n  ")}\n  \`\`\``
+              })
+            )
+            return ok(`Alerts on ${target.name}:\n${lines.join("\n")}`)
+          } catch (error) {
+            return fail(error)
+          }
+        },
+        { alwaysLoad: true }
+      ),
+
+      tool(
+        "save_alert",
+        "Create an alert, or change one. An alert is a read-only query returning one number (the first column of its first row — wrap sums in coalesce(…, 0)), checked in the background while the app is open, with a system notification when the number goes above or below a threshold, or changes by a percentage between checks. The user approves it first. To change one, pass `alert` (its id or name from list_alerts) and only what changes. The query is run once before saving; if it fails or returns no number, nothing is saved.",
+        {
+          connection,
+          alert: z
+            .string()
+            .optional()
+            .describe("To change an existing alert: its id or name. Leave out to create one."),
+          name: z.string().optional().describe('Short: "Revenue today", "Failed jobs". Needed for a new alert.'),
+          sql: z
+            .string()
+            .optional()
+            .describe("A read-only query whose first column of the first row is the number. Needed for a new alert."),
+          condition: z
+            .enum(ALERT_CONDITIONS)
+            .optional()
+            .describe("above: fires when the number goes above the threshold; below: drops below it; change: moves by at least `threshold` percent since the check before. Needed for a new alert."),
+          threshold: z
+            .number()
+            .optional()
+            .describe("The bound, in the number's own units; for `change`, a percentage above 0. Needed for a new alert."),
+          every_minutes: z
+            .number()
+            .int()
+            .optional()
+            .describe(`How often it is checked, in minutes: usually one of ${ALERT_INTERVALS.join(", ")}. 15 for a new alert when not said.`),
+          enabled: z.boolean().optional().describe("False turns it off without deleting it."),
+        },
+        async (args) => {
+          try {
+            approved("save_alert", args)
+            const target = resolve(args.connection)
+            const store = alertStore()
+            const existing = args.alert ? alertOf(target, args.alert) : null
+            const name = args.name?.trim() || existing?.name
+            const sql = args.sql?.trim() || existing?.sql
+            const condition = args.condition ?? existing?.condition
+            const threshold = args.threshold ?? existing?.threshold
+            if (!name || !sql || !condition || threshold === undefined) {
+              throw new Error("A new alert needs name, sql, condition and threshold.")
+            }
+            // Run as the assistant first: what it may not read, it may not watch.
+            const result = await host.connections
+              .assistantDriver(target.id)
+              .query(sql, { readOnly: true, maxRows: 1, timeoutMs: QUERY_TIMEOUT_MS })
+            const value = readAlertValue(result)
+            const saved = store.save({
+              id: existing?.id ?? null,
+              connectionId: target.id,
+              name,
+              sql,
+              condition,
+              threshold,
+              everyMinutes: args.every_minutes ?? existing?.everyMinutes ?? 15,
+              enabled: args.enabled ?? existing?.enabled ?? true,
+            })
+            host.open({ kind: "alerts", connectionId: target.id })
+            const now = alertFires(saved.condition, saved.threshold, value, existing?.state.value ?? null)
+            return ok(
+              `${existing ? "Changed" : "Created"} the alert "${saved.name}" (id ${saved.id}) on ${target.name}: it fires when it ${describeCondition(saved.condition, saved.threshold)}, checked ${describeInterval(saved.everyMinutes)}${saved.enabled ? "" : " — it is OFF"}. Its query reads ${value} now` +
+                (saved.condition === "change" && !existing
+                  ? "; a change is measured from the next check on."
+                  : now
+                    ? ", so it fires now and the user gets a notification."
+                    : ", within bounds.")
+            )
+          } catch (error) {
+            return fail(error)
+          }
+        },
+        { alwaysLoad: true }
+      ),
+
+      tool(
+        "delete_alert",
+        "Delete an alert; it stops being checked. The user approves it first. Only when they ask for it — to pause one, save_alert with enabled false.",
+        {
+          connection,
+          alert: z.string().describe("The alert's id or name, from list_alerts."),
+        },
+        async (args) => {
+          try {
+            approved("delete_alert", args)
+            const target = resolve(args.connection)
+            const alert = alertOf(target, args.alert)
+            alertStore().remove(alert.id)
+            return ok(`Deleted the alert "${alert.name}".`)
           } catch (error) {
             return fail(error)
           }

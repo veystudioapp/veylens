@@ -5,6 +5,7 @@ import type {
   Permissions,
   QueryResult,
   RowsRequest,
+  SchemaDiagram,
   TableRef,
   TreeSchema,
 } from "../../shared/api"
@@ -174,6 +175,20 @@ export class GuardedDriver implements Driver {
     }
   }
 
+  /** A schema's diagram without what is hidden here, and without the keys
+   * that would say a hidden table is there. Structure-only tables are drawn:
+   * a diagram is structure. */
+  async diagram(schema: string): Promise<SchemaDiagram> {
+    if (!this.inner.diagram) throw new Error("This kind of connection has no foreign keys to draw.")
+    const [{ permissions }, diagram] = await Promise.all([this.context(), this.inner.diagram(schema)])
+    const seen = (ref: TableRef) => objectAccess(permissions, ref) !== "hidden"
+    return {
+      ...diagram,
+      tables: diagram.tables.filter((table) => seen({ schema: table.schema, table: table.name })),
+      links: diagram.links.filter((link) => seen(link.from) && seen(link.to)),
+    }
+  }
+
   async rows(request: RowsRequest) {
     const { permissions } = await this.read(request)
     const { maxRows } = this.limits(permissions, true)
@@ -209,6 +224,12 @@ export class GuardedDriver implements Driver {
     } finally {
       if (!options.readOnly) this.views.forget()
     }
+  }
+
+  /** Why a read of this SQL would be refused through this guard, without
+   * running it: for what someone else reads on its behalf. */
+  async refusals(sql: string): Promise<string[]> {
+    return hiddenIn(sql, await this.context())
   }
 
   async explain(sql: string): Promise<QueryResult> {

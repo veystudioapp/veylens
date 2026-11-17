@@ -80,7 +80,7 @@ export const TOOL_MODES = ["allow", "ask", "off"] as const
 
 export type ToolMode = (typeof TOOL_MODES)[number]
 
-export type ToolGroup = "Read" | "Show" | "Dashboards" | "Remember" | "Change data"
+export type ToolGroup = "Read" | "Show" | "Dashboards" | "Alerts" | "Remember" | "Change data"
 
 export type ToolInfo = {
   /** As the agent calls it, without the MCP prefix. */
@@ -221,6 +221,32 @@ export const TOOL_CATALOG: ToolInfo[] = [
     label: "Delete dashboards",
     description: "Deletes a whole dashboard with its tiles and filters.",
     group: "Dashboards",
+    modes: APPROVED,
+    default: "ask",
+  },
+  {
+    name: "list_alerts",
+    label: "Read alerts",
+    description:
+      "Your alerts on a connection: what each watches, when it fires, and how it stood at its last check.",
+    group: "Alerts",
+    modes: OPTIONAL,
+    default: "allow",
+  },
+  {
+    name: "save_alert",
+    label: "Create and change alerts",
+    description:
+      "Adds an alert, or changes one's query, condition, schedule or whether it is on. Its query is tried first.",
+    group: "Alerts",
+    modes: APPROVED,
+    default: "ask",
+  },
+  {
+    name: "delete_alert",
+    label: "Delete alerts",
+    description: "Deletes an alert; it stops being checked.",
+    group: "Alerts",
     modes: APPROVED,
     default: "ask",
   },

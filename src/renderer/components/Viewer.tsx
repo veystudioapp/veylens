@@ -1,4 +1,5 @@
 import {
+  Bell,
   BookOpen,
   Check,
   ChevronDown,
@@ -6,6 +7,7 @@ import {
   Database,
   Eye,
   LayoutDashboard,
+  Network,
   PanelLeft,
   PanelRight,
   Plus,
@@ -53,7 +55,9 @@ import { locationOf } from "@shared/address"
 import type { Tone } from "@shared/api"
 import { cn } from "@/lib/utils"
 
+import { AlertsView } from "./AlertsView"
 import { DashboardView } from "./DashboardView"
+import { DiagramView } from "./DiagramView"
 import { KnowledgeView } from "./KnowledgeView"
 import { QueryView } from "./QueryView"
 import { IconButton } from "./icon-button"
@@ -78,7 +82,11 @@ function TabIcon({ tab }: { tab: Tab }) {
         ? [<LayoutDashboard />, KIND_TONE.dashboard]
         : tab.kind === "knowledge"
           ? [<BookOpen />, KIND_TONE.context]
-          : isView
+          : tab.kind === "diagram"
+            ? [<Network />, KIND_TONE.schema]
+            : tab.kind === "alerts"
+              ? [<Bell />, KIND_TONE.alert]
+              : isView
             ? [<Eye />, KIND_TONE.view]
             : [<Table2 />, KIND_TONE.table]
   return (
@@ -112,6 +120,13 @@ function useTabLabel(tab: Tab): { label: string; title: string } {
         label: "Business context",
         title: `Business context · ${connection?.name ?? ""}`,
       }
+    case "diagram":
+      return {
+        label: `${tab.schema} diagram`,
+        title: `Diagram of ${tab.schema} · ${connection?.name ?? ""}`,
+      }
+    case "alerts":
+      return { label: "Alerts", title: `Alerts · ${connection?.name ?? ""}` }
   }
 }
 
@@ -417,6 +432,10 @@ const Panel = memo(function Panel({ tab, active }: { tab: Tab; active: boolean }
       return <DashboardView tab={tab} active={active} />
     case "knowledge":
       return <KnowledgeView tab={tab} active={active} />
+    case "diagram":
+      return <DiagramView tab={tab} active={active} />
+    case "alerts":
+      return <AlertsView tab={tab} active={active} />
   }
 })
 
@@ -442,6 +461,8 @@ function StartPage() {
   const openTable = useStore((state) => state.openTable)
   const openKnowledge = useStore((state) => state.openKnowledge)
   const openDashboard = useStore((state) => state.openDashboard)
+  const openDiagram = useStore((state) => state.openDiagram)
+  const openAlerts = useStore((state) => state.openAlerts)
   const openDialog = useStore((state) => state.openDialog)
   const loadTree = useStore((state) => state.loadTree)
 
@@ -514,6 +535,23 @@ function StartPage() {
           >
             Business context
           </StartRow>
+          <StartRow
+            icon={<Bell />}
+            tone={KIND_TONE.alert}
+            onClick={() => openAlerts(connection.id)}
+          >
+            Alerts
+          </StartRow>
+          {connection.engine !== "duckdb" && tree?.status === "ready" && tree.schemas[0] && (
+            <StartRow
+              icon={<Network />}
+              tone={KIND_TONE.schema}
+              meta={tree.schemas.length > 1 ? tree.schemas[0].name : undefined}
+              onClick={() => openDiagram(connection.id, tree.schemas[0]!.name)}
+            >
+              Schema diagram
+            </StartRow>
+          )}
         </StartSection>
 
         {dashboards.length > 0 && (

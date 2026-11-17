@@ -10,6 +10,7 @@ import type {
   QueryResult,
   RowsRequest,
   RowsResult,
+  SchemaDiagram,
   Sort,
   ForeignKeyAction,
   TableColumn,
@@ -29,8 +30,10 @@ import {
   type Statement,
 } from "./sql"
 import {
+  assembleDiagram,
   bare,
   COUNT_TIMEOUT_MS,
+  type DiagramKeyRow,
   explained,
   lockedOut,
   planFailure,
@@ -89,6 +92,12 @@ const names = (json: Cell | undefined): string[] => {
     return []
   }
 }
+
+/** A key's column numbers as their names, in the key's order, as JSON. */
+const attnames = (keys: string, relation: string) =>
+  `to_json(ARRAY(SELECT a.attname FROM unnest(${keys}) WITH ORDINALITY k(num, ord)
+                   JOIN pg_attribute a ON a.attrelid = ${relation} AND a.attnum = k.num
+                  ORDER BY k.ord))`
 
 const sizeOf = (value: Cell | undefined): number | null =>
   value === null || value === undefined || value === "" ? null : Number(value)
@@ -273,6 +282,71 @@ export class PostgresDriver implements Driver {
     )
   }
 
+  /** Keys from or into the schema first, then the columns of every table
+   * they touch — the schema's own, and any of another schema they reach. */
+  async diagram(schema: string): Promise<SchemaDiagram> {
+    const keys = await this.run(this.pool, {
+      text: `SELECT con.conname, n.nspname, c.relname,
+                    ${attnames("con.conkey", "con.conrelid")},
+                    fn.nspname, fc.relname,
+                    ${attnames("con.confkey", "con.confrelid")}
+               FROM pg_constraint con
+               JOIN pg_class c ON c.oid = con.conrelid
+               JOIN pg_namespace n ON n.oid = c.relnamespace
+               JOIN pg_class fc ON fc.oid = con.confrelid
+               JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+              WHERE con.contype = 'f' AND (n.nspname = $1 OR fn.nspname = $1)
+              ORDER BY n.nspname, c.relname, con.conname`,
+      values: [schema],
+    })
+    const keyRows: DiagramKeyRow[] = keys.rows.map((row) => ({
+      name: row[0] ?? "",
+      schema: row[1] ?? "",
+      table: row[2] ?? "",
+      columns: names(row[3]),
+      refSchema: row[4] ?? "",
+      refTable: row[5] ?? "",
+      refColumns: names(row[6]),
+    }))
+    const elsewhere = new Map<string, { s: string; t: string }>()
+    for (const key of keyRows) {
+      for (const [s, t] of [[key.schema, key.table], [key.refSchema, key.refTable]] as const) {
+        if (s !== schema) elsewhere.set(JSON.stringify([s, t]), { s, t })
+      }
+    }
+    const columns = await this.run(this.pool, {
+      text: `SELECT n.nspname, c.relname, c.relkind, a.attname,
+                    format_type(a.atttypid, a.atttypmod), NOT a.attnotnull,
+                    EXISTS (
+                      SELECT 1 FROM pg_index i
+                       WHERE i.indrelid = a.attrelid AND i.indisprimary
+                         AND a.attnum = ANY (i.indkey)
+                    )
+               FROM pg_class c
+               JOIN pg_namespace n ON n.oid = c.relnamespace
+               JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+              WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                AND (n.nspname = $1
+                     OR (n.nspname, c.relname) IN (
+                       SELECT s, t FROM json_to_recordset($2::json) AS x(s text, t text)))
+              ORDER BY (n.nspname = $1) DESC, n.nspname, c.relname, a.attnum`,
+      values: [schema, JSON.stringify([...elsewhere.values()])],
+    })
+    return assembleDiagram(
+      schema,
+      columns.rows.map((row) => ({
+        schema: row[0] ?? "",
+        table: row[1] ?? "",
+        view: row[2] === "v" || row[2] === "m",
+        column: row[3] ?? "",
+        type: row[4] ?? "unknown",
+        nullable: row[5] === "t",
+        primaryKey: row[6] === "t",
+      })),
+      keyRows
+    )
+  }
+
   async table(ref: TableRef): Promise<TableInfo> {
     const key = { values: [ref.schema, ref.table] }
     const [columns, foreignKeys] = await Promise.all([
@@ -340,10 +414,6 @@ export class PostgresDriver implements Driver {
 
   async details(ref: TableRef): Promise<TableDetails> {
     const key = { values: [ref.schema, ref.table] }
-    const attnames = (keys: string, relation: string) =>
-      `to_json(ARRAY(SELECT a.attname FROM unnest(${keys}) WITH ORDINALITY k(num, ord)
-                       JOIN pg_attribute a ON a.attrelid = ${relation} AND a.attnum = k.num
-                      ORDER BY k.ord))`
     const [relation, columns, constraints, indexes, incoming] = await Promise.all([
       this.run(this.pool, {
         text: `SELECT c.relkind, obj_description(c.oid, 'pg_class'), c.reltuples::int8,

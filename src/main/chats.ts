@@ -49,6 +49,7 @@ import {
 import { claudeEnvironment, locateClaude } from "./claude-bin"
 import { refusal, type AuditLog } from "./audit"
 import type { Connections } from "./connections"
+import type { Alerts } from "./alerts"
 import type { Library } from "./library"
 
 type ToolItem = Extract<ChatItem, { kind: "tool" }>
@@ -67,6 +68,8 @@ const AUDITED: Partial<Record<string, AuditAction>> = {
   edit_dashboard: "dashboard",
   remove_from_dashboard: "dashboard",
   delete_dashboard: "dashboard",
+  save_alert: "alert",
+  delete_alert: "alert",
 }
 
 /** One line for the log, from what the call was given. */
@@ -102,6 +105,12 @@ function auditSummary(tool: string, input: Record<string, unknown>): string {
         : `Removed tile ${text(input.tile)} from ${dashboard}`
     case "delete_dashboard":
       return `Deleted the dashboard ${dashboard}`
+    case "save_alert":
+      return text(input.alert)
+        ? `Changed the alert "${text(input.name) || text(input.alert)}"`
+        : `Created the alert "${text(input.name)}"`
+    case "delete_alert":
+      return `Deleted the alert "${text(input.alert)}"`
     default:
       return tool
   }
@@ -152,6 +161,7 @@ Showing results:
 
 Changing things:
 - Changes (INSERT, UPDATE, DELETE, DDL) happen only when the user asked for a change. A single statement goes through execute_sql; anything that takes two or more statements goes through execute_plan as one plan, so the user reviews and approves it once. The user sees exactly what will run. Before a destructive change, check with a SELECT how many rows it will touch and say so. If they decline, do not retry.
+- When the user wants to be told when a figure crosses a line or swings — "let me know if…", "warn me when…", "watch…" — set up an alert with save_alert: a query returning one number, a condition and how often to check. Try the query with run_query first if unsure. To change, pause (enabled false) or delete one, read list_alerts first and pass its id; delete_alert only when asked to delete.
 - When the two of you settle how a figure is computed, offer to save it with save_metric. When you learn something about the data that will matter again — what a status code means, which table is authoritative — offer to keep it with append_note. The user may be asked to approve either first.
 
 How to answer:
@@ -312,6 +322,10 @@ export function describeContext(
     )
   } else if (tab?.kind === "knowledge") {
     lines.push("tab: the business context editor (notes and metrics)")
+  } else if (tab?.kind === "diagram") {
+    lines.push(`tab: the diagram of schema ${tab.schema} (its tables and the foreign keys between them)`)
+  } else if (tab?.kind === "alerts") {
+    lines.push("tab: the alerts page (numbers checked in the background, with a notification when out of bounds)")
   } else {
     lines.push("tab: none open")
   }
@@ -429,7 +443,8 @@ export class Chats {
     private readonly connections: Connections,
     private readonly library: Library,
     private readonly emit: (event: ChatEvent) => void,
-    private readonly audit?: AuditLog
+    private readonly audit?: AuditLog,
+    private readonly alerts?: Alerts
   ) {
     this.directory = path.join(dataDir, "chats")
     // Where each `claude` runs: an empty directory of this app's own, so the
@@ -739,6 +754,7 @@ export class Chats {
     const tools = createDbTools({
       connections: this.connections,
       library: this.library,
+      ...(this.alerts ? { alerts: this.alerts } : {}),
       takeGrant: (tool, args) => live.grants.delete(grantKey(tool, args)),
       open: (target) => this.emit({ type: "open", chatId: chat.id, target }),
       changed: (connectionId) =>

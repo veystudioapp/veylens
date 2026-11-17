@@ -11,6 +11,7 @@ import type {
   QueryResult,
   RowsRequest,
   RowsResult,
+  SchemaDiagram,
   Sort,
   ForeignKeyAction,
   TableColumn,
@@ -32,8 +33,10 @@ import {
   type Statement,
 } from "./sql"
 import {
+  assembleDiagram,
   bare,
   COUNT_TIMEOUT_MS,
+  type DiagramKeyRow,
   explained,
   lockedOut,
   planFailure,
@@ -425,6 +428,70 @@ export class MysqlDriver implements Driver {
         )
       })
     }
+  }
+
+  /** As the Postgres one: keys first, then the columns of what they touch. */
+  async diagram(schema: string): Promise<SchemaDiagram> {
+    const keys = await this.run(this.pool, {
+      text: `SELECT constraint_name, table_schema, table_name, column_name,
+                    referenced_table_schema, referenced_table_name, referenced_column_name
+               FROM information_schema.key_column_usage
+              WHERE referenced_table_name IS NOT NULL
+                AND (table_schema = ? OR referenced_table_schema = ?)
+              ORDER BY table_schema, table_name, constraint_name, ordinal_position`,
+      values: [schema, schema],
+    })
+    const grouped = new Map<string, DiagramKeyRow>()
+    for (const [name, from, table, column, refSchema, refTable, refColumn] of keys.rows) {
+      const id = JSON.stringify([from, table, name])
+      let key = grouped.get(id)
+      if (!key) {
+        key = {
+          name: name ?? "",
+          schema: from ?? "",
+          table: table ?? "",
+          columns: [],
+          refSchema: refSchema ?? "",
+          refTable: refTable ?? "",
+          refColumns: [],
+        }
+        grouped.set(id, key)
+      }
+      key.columns.push(column ?? "")
+      key.refColumns.push(refColumn ?? "")
+    }
+    const keyRows = [...grouped.values()]
+    const elsewhere = new Map<string, [string, string]>()
+    for (const key of keyRows) {
+      for (const pair of [[key.schema, key.table], [key.refSchema, key.refTable]] as [string, string][]) {
+        if (pair[0] !== schema) elsewhere.set(JSON.stringify(pair), pair)
+      }
+    }
+    const others = [...elsewhere.values()]
+    const columns = await this.run(this.pool, {
+      text: `SELECT c.table_schema, c.table_name, t.table_type, c.column_name,
+                    c.column_type, c.is_nullable, c.column_key
+               FROM information_schema.columns c
+               JOIN information_schema.tables t
+                 ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+              WHERE c.table_schema = ?
+                    ${others.length ? `OR (c.table_schema, c.table_name) IN (${others.map(() => "(?, ?)").join(", ")})` : ""}
+              ORDER BY c.table_schema = ? DESC, c.table_schema, c.table_name, c.ordinal_position`,
+      values: [schema, ...others.flat(), schema],
+    })
+    return assembleDiagram(
+      schema,
+      columns.rows.map((row) => ({
+        schema: row[0] ?? "",
+        table: row[1] ?? "",
+        view: row[2] === "VIEW",
+        column: row[3] ?? "",
+        type: row[4] ?? "unknown",
+        nullable: row[5] === "YES",
+        primaryKey: row[6] === "PRI",
+      })),
+      keyRows
+    )
   }
 
   async table(ref: TableRef): Promise<TableInfo> {

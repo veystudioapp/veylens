@@ -41,6 +41,13 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.runQuery, connectionId, sql, readOnly, params),
   explainQuery: (connectionId, sql) =>
     ipcRenderer.invoke(IPC.explainQuery, connectionId, sql),
+  getSchemaDiagram: (connectionId, schema) =>
+    ipcRenderer.invoke(IPC.getSchemaDiagram, connectionId, schema),
+
+  listAlerts: () => ipcRenderer.invoke(IPC.listAlerts),
+  saveAlert: (input) => ipcRenderer.invoke(IPC.saveAlert, input),
+  deleteAlert: (alertId) => ipcRenderer.invoke(IPC.deleteAlert, alertId),
+  checkAlert: (alertId) => ipcRenderer.invoke(IPC.checkAlert, alertId),
 
   getKnowledge: (connectionId) =>
     ipcRenderer.invoke(IPC.getKnowledge, connectionId),

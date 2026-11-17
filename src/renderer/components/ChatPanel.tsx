@@ -2,6 +2,7 @@ import {
   ArrowUp,
   AtSign,
   Ban,
+  Bell,
   BookOpen,
   ChartColumn,
   Check,
@@ -42,9 +43,11 @@ import {
   withoutTag,
   type ChatImage,
 } from "@shared/chat-images"
+import { describeCondition, describeInterval } from "@shared/alerts"
 import {
   chatEfforts,
   isTextTile,
+  type AlertCondition,
   type ChatItem,
   type Connection,
   type Dashboard,
@@ -208,6 +211,25 @@ function toolLabel(item: ToolItem, preview: Preview | null): string {
         : item.status === "awaiting"
           ? `Delete ${dashboardLabel(input.dashboard)}?`
           : `Deleted the dashboard ${String(input.dashboard ?? "")}`.trim()
+    case "list_alerts":
+      return "Read alerts"
+    case "save_alert": {
+      const name = String(input.name ?? input.alert ?? "")
+      const change = typeof input.alert === "string" && input.alert.trim()
+      return item.status === "denied"
+        ? `Alert "${name}" not saved`
+        : item.status === "awaiting"
+          ? `${change ? "Change" : "Create"} the alert "${name}"?`
+          : item.status === "error"
+            ? `Alert "${name}" not saved`
+            : `${change ? "Changed" : "Created"} the alert "${name}"`
+    }
+    case "delete_alert":
+      return item.status === "denied"
+        ? `Kept the alert "${String(input.alert ?? "")}"`
+        : item.status === "awaiting"
+          ? `Delete the alert "${String(input.alert ?? "")}"?`
+          : `Deleted the alert "${String(input.alert ?? "")}"`
     case "get_business_context":
       return "Read business context"
     case "save_metric":
@@ -369,6 +391,79 @@ function DashboardRemoval({ item }: { item: ToolItem }) {
   )
 }
 
+/** An alert to be made, changed or deleted: as it would be, beside how it is. */
+function AlertChange({ item }: { item: ToolItem }) {
+  const input = item.input
+  const connections = useStore((state) => state.connections)
+  const connectionId = findConnection(connections, input.connection)?.id
+  const existing = useStore((state) => {
+    const needle = String(input.alert ?? "").trim()
+    if (!needle) return undefined
+    const mine = state.alerts.filter((alert) => alert.connectionId === connectionId)
+    return (
+      mine.find((alert) => alert.id === needle) ??
+      mine.find((alert) => alert.name.trim().toLowerCase() === needle.toLowerCase())
+    )
+  })
+  const deleting = item.tool === "delete_alert"
+  const pick = <T,>(given: unknown, before: T | undefined): T | undefined =>
+    given === undefined || given === null || given === "" ? before : (given as T)
+  const name = deleting ? existing?.name : pick<string>(input.name, existing?.name)
+  const sql = deleting ? existing?.sql : pick<string>(input.sql, existing?.sql)
+  const condition = deleting ? existing?.condition : pick<AlertCondition>(input.condition, existing?.condition)
+  const threshold = deleting ? existing?.threshold : pick<number>(input.threshold, existing?.threshold)
+  const every = deleting
+    ? existing?.everyMinutes
+    : pick<number>(input.every_minutes, existing?.everyMinutes ?? 15)
+  const enabled = deleting ? existing?.enabled : pick<boolean>(input.enabled, existing?.enabled ?? true)
+
+  /** What this call changes, of an existing alert. */
+  const changes = existing && !deleting
+    ? [
+        name !== existing.name && `renamed from "${existing.name}"`,
+        sql !== existing.sql && "a new query",
+        (condition !== existing.condition || threshold !== existing.threshold) &&
+          `was: ${describeCondition(existing.condition, existing.threshold)}`,
+        every !== existing.everyMinutes && `was checked ${describeInterval(existing.everyMinutes)}`,
+        enabled !== existing.enabled && (enabled ? "turned on" : "turned off"),
+      ].filter(Boolean)
+    : []
+
+  return (
+    <>
+      <div className="flex flex-col gap-1.5 rounded-md border bg-muted/50 px-2.5 py-2">
+        <div className="flex items-center gap-2">
+          <IconTile tone={KIND_TONE.alert} size="sm">
+            <Bell />
+          </IconTile>
+          <div className="min-w-0">
+            <div className="truncate text-[13px] font-medium">
+              {name ?? String(input.alert ?? "")}
+              {enabled === false && <span className="font-normal text-muted-foreground"> · off</span>}
+            </div>
+            {condition && threshold !== undefined && (
+              <div className="text-[11px] text-muted-foreground">
+                Fires when it {describeCondition(condition, threshold)}
+                {every ? ` · ${describeInterval(every)}` : ""}
+              </div>
+            )}
+          </div>
+        </div>
+        {sql && <Sql text={sql} />}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {deleting
+          ? "It stops being checked. The data it watched is not touched."
+          : changes.length
+            ? `Changes: ${changes.join("; ")}.`
+            : existing
+              ? "Saved as it is."
+              : "Its query is run once now, read-only; then it is checked in the background, with a notification when it fires."}
+      </p>
+    </>
+  )
+}
+
 /** What an approval card says the call will do. */
 function ApprovalBody({ item, engine }: { item: ToolItem; engine?: string }) {
   const input = item.input
@@ -410,6 +505,9 @@ function ApprovalBody({ item, engine }: { item: ToolItem; engine?: string }) {
     case "remove_from_dashboard":
     case "delete_dashboard":
       return <DashboardRemoval item={item} />
+    case "save_alert":
+    case "delete_alert":
+      return <AlertChange item={item} />
     case "append_note":
       return (
         <>
@@ -441,6 +539,8 @@ const APPROVAL_COPY: Record<string, { title: string; action: string }> = {
   append_note: { title: "Add this note to", action: "Add note" },
   remove_from_dashboard: { title: "Remove this from a dashboard on", action: "Remove" },
   delete_dashboard: { title: "Delete this dashboard on", action: "Delete dashboard" },
+  save_alert: { title: "Save this alert on", action: "Save alert" },
+  delete_alert: { title: "Delete this alert on", action: "Delete alert" },
 }
 
 /** The card a call that changes something waits behind until it is answered. */
@@ -451,7 +551,8 @@ function Approval({ item, chatId }: { item: ToolItem; chatId: string }) {
   const answer = (allow: boolean) =>
     void window.veylens.answerApproval(chatId, item.id, allow)
   const writes = item.tool === "execute_sql" || item.tool === "execute_plan"
-  const removes = item.tool === "remove_from_dashboard" || item.tool === "delete_dashboard"
+  const removes =
+    item.tool === "remove_from_dashboard" || item.tool === "delete_dashboard" || item.tool === "delete_alert"
 
   return (
     <div
@@ -467,6 +568,8 @@ function Approval({ item, chatId }: { item: ToolItem; chatId: string }) {
           <Trash2 className="size-3.5 text-destructive" />
         ) : item.tool === "save_metric" ? (
           <Sigma className="size-3.5 text-muted-foreground" />
+        ) : item.tool === "save_alert" ? (
+          <Bell className="size-3.5 text-muted-foreground" />
         ) : (
           <BookOpen className="size-3.5 text-muted-foreground" />
         )}
@@ -580,6 +683,7 @@ const WRITING: Record<string, string> = {
   edit_dashboard_tile: "Preparing the change…",
   save_metric: "Writing a metric…",
   append_note: "Writing a note…",
+  save_alert: "Writing an alert…",
 }
 
 /**

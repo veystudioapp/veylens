@@ -10,7 +10,28 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
-import { DEFAULT_AI_SETTINGS, tileText, type ChatEvent, type ChatItem as ChatItemT, type ViewerTarget } from "../src/shared/api"
+import {
+  DEFAULT_AI_SETTINGS,
+  tileText,
+  type Alert,
+  type ChatEvent,
+  type ChatItem as ChatItemT,
+  type DiagramLink,
+  type DiagramTable,
+  type ViewerTarget,
+} from "../src/shared/api"
+import { alertFires, describeCondition, describeInterval, readAlertValue } from "../src/shared/alerts"
+import {
+  idStem,
+  inferLinks,
+  layoutDiagram,
+  linkCounts,
+  nodeHeight,
+  relatedTo,
+  shownColumns,
+  toMermaid,
+} from "../src/shared/diagram"
+import { Alerts } from "../src/main/alerts"
 import {
   anomalies,
   bridge,
@@ -125,9 +146,11 @@ const shop = connections.save(null, {
 const charts: ChartItem[] = []
 const opened: ViewerTarget[] = []
 const grants = new Set<string>()
+const agentAlerts = new Alerts(path.join(dir, "agent-alerts.json"), connections, () => {}, () => {})
 const tools = dbToolDefinitions({
   connections,
   library,
+  alerts: agentAlerts,
   takeGrant: (tool, args) => grants.delete(grantKey(tool, args)),
   open: (target) => opened.push(target),
   changed: () => {},
@@ -294,7 +317,10 @@ await check("show_chart: refuses what cannot be drawn, and writes", async () => 
 await check("tools that change things need the user's approval", async () => {
   assert.deepEqual(
     [...APPROVAL_TOOLS].sort(),
-    ["append_note", "delete_dashboard", "execute_plan", "execute_sql", "remove_from_dashboard", "save_metric"]
+    [
+      "append_note", "delete_alert", "delete_dashboard", "execute_plan", "execute_sql",
+      "remove_from_dashboard", "save_alert", "save_metric",
+    ]
   )
   const args = {
     connection: "Shop",
@@ -959,6 +985,290 @@ await check("structure: indexes, constraints, keys pointing in, size, comments a
   await write("DROP VIEW cheap_shelf")
   await write("DROP TABLE shelf_item")
   await write("DROP TABLE shelf")
+})
+
+// ── Schema diagram ─────────────────────────────────────────────────────────
+
+const linkText = (link: DiagramLink) =>
+  `${link.from.schema}.${link.from.table}(${link.from.columns.join(",")})->${link.to.schema}.${link.to.table}(${link.to.columns.join(",")})`
+
+await check("diagram: tables, keys and the foreign keys between them, from the catalogue", async () => {
+  const diagram = await driver.diagram("public")
+  const names = diagram.tables.map((table) => table.name)
+  for (const name of ["customers", "orders", "order_items", "products"]) assert.ok(names.includes(name), names.join())
+  const links = diagram.links.map(linkText).sort()
+  assert.ok(links.includes("public.orders(customer_id)->public.customers(id)"), links.join("\n"))
+  assert.ok(links.includes("public.order_items(order_id)->public.orders(id)"), links.join("\n"))
+  assert.ok(links.includes("public.order_items(product_id)->public.products(id)"), links.join("\n"))
+  const customers = diagram.tables.find((table) => table.name === "customers")!
+  assert.deepEqual(customers.columns.filter((column) => column.primaryKey).map((column) => column.name), ["id"])
+  assert.equal(customers.kind, "table")
+
+  // A key into another schema brings that table along, so the line has an end.
+  const write = (sql: string) => driver.query(sql, { readOnly: false, maxRows: 1 })
+  await write("CREATE SCHEMA crm")
+  await write("CREATE TABLE crm.notes (id serial PRIMARY KEY, customer_id int REFERENCES public.customers(id), body text)")
+  try {
+    const crm = await driver.diagram("crm")
+    assert.deepEqual(crm.tables.map((table) => `${table.schema}.${table.name}`), ["crm.notes", "public.customers"])
+    assert.deepEqual(crm.links.map(linkText), ["crm.notes(customer_id)->public.customers(id)"])
+    // And from the other side: public's diagram shows who points in.
+    assert.ok((await driver.diagram("public")).links.map(linkText).includes("crm.notes(customer_id)->public.customers(id)"))
+  } finally {
+    await write("DROP SCHEMA crm CASCADE")
+  }
+})
+
+await check("diagram: a hidden table and every key to it are left out", async () => {
+  connections.setPermissions(shop.id, { ...DEFAULT_PERMISSIONS, objects: [{ schema: "public", table: "orders", access: "hidden" }] })
+  try {
+    const diagram = await connections.driver(shop.id).diagram("public")
+    assert.ok(!diagram.tables.some((table) => table.name === "orders"))
+    assert.ok(!diagram.links.some((link) => link.from.table === "orders" || link.to.table === "orders"), diagram.links.map(linkText).join())
+    assert.ok(diagram.links.map(linkText).includes("public.order_items(product_id)->public.products(id)"))
+  } finally {
+    connections.setPermissions(shop.id, DEFAULT_PERMISSIONS)
+  }
+})
+
+await check("diagram: keys inferred from names, laid out parents first, written as Mermaid", () => {
+  const column = (name: string, primaryKey = false) => ({ name, type: "integer", primaryKey, nullable: !primaryKey })
+  const table = (name: string, ...columns: ReturnType<typeof column>[]): DiagramTable => ({ schema: "app", name, kind: "table", columns })
+  const tables = [
+    table("customers", column("id", true), column("name")),
+    table("categories", column("id", true)),
+    table("orders", column("id", true), column("customer_id"), column("categoryId"), column("legacy_id")),
+    table("order_lines", column("id", true), column("order_id")),
+    table("settings", column("key", true)),
+  ]
+  const declared: DiagramLink[] = [
+    { name: "lines_order", from: { schema: "app", table: "order_lines", columns: ["order_id"] }, to: { schema: "app", table: "orders", columns: ["id"] } },
+  ]
+  assert.equal(idStem("customer_id"), "customer")
+  assert.equal(idStem("CustomerID"), "customer")
+  assert.equal(idStem("id"), null)
+  const inferred = inferLinks(tables, declared)
+  // customer_id → customers, categoryId → categories; legacy_id has no table,
+  // and order_id is declared already.
+  assert.deepEqual(inferred.map(linkText).sort(), [
+    "app.orders(categoryId)->app.categories(id)",
+    "app.orders(customer_id)->app.customers(id)",
+  ])
+  assert.ok(inferred.every((link) => link.inferred))
+
+  const all = [...declared, ...inferred]
+  const layout = layoutDiagram(tables, all, (item) => nodeHeight(shownColumns(item, all, "all").length))
+  const box = (name: string) => layout.boxes.get(`app.${name}`)!
+  assert.ok(box("customers").x < box("orders").x && box("orders").x < box("order_lines").x)
+  assert.equal(box("customers").x, box("categories").x)
+  // Linked to nothing: below the rest.
+  assert.ok(box("settings").y >= Math.max(...["customers", "categories", "orders", "order_lines"].map((name) => box(name).y + box(name).height)))
+  const boxes = [...layout.boxes.values()]
+  for (const [index, a] of boxes.entries()) {
+    for (const b of boxes.slice(index + 1)) {
+      const apart = a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y
+      assert.ok(apart, `overlap: ${JSON.stringify(a)} ${JSON.stringify(b)}`)
+    }
+  }
+  // Keys only: the key and the columns a link uses.
+  assert.deepEqual(shownColumns(tables[2]!, all, "keys").map((item) => item.name), ["id", "customer_id", "categoryId"])
+  // Picking tables: one, and what its keys reach either way; counts per table.
+  assert.deepEqual([...relatedTo(["app.orders"], all)].sort(), [
+    "app.categories", "app.customers", "app.order_lines", "app.orders",
+  ])
+  assert.deepEqual([...relatedTo(["app.customers"], all)].sort(), ["app.customers", "app.orders"])
+  assert.deepEqual([...relatedTo(["app.settings"], all)], ["app.settings"])
+  const counts = linkCounts(all)
+  assert.equal(counts.get("app.orders"), 3)
+  assert.equal(counts.get("app.settings"), undefined)
+  // A cycle does not hang the layout.
+  const cycle: DiagramLink[] = [
+    { name: "a", from: { schema: "app", table: "customers", columns: ["id"] }, to: { schema: "app", table: "orders", columns: ["id"] } },
+    ...all,
+  ]
+  assert.equal(layoutDiagram(tables, cycle, () => 50).boxes.size, tables.length)
+
+  const mermaid = toMermaid({ schema: "app", tables, links: declared }, all)
+  assert.match(mermaid, /^erDiagram\n/)
+  assert.match(mermaid, /  orders \{\n    integer id PK\n    integer customer_id FK\n/)
+  assert.match(mermaid, /  orders \|o--o\{ order_lines : "order_id"/)
+  assert.match(mermaid, /  customers \|o--o\{ orders : "customer_id \(inferred\)"/)
+})
+
+// ── Alerts ─────────────────────────────────────────────────────────────────
+
+await check("alerts: a number read, compared, and described", () => {
+  const result = (cell: string | null) => ({ columns: [num("n")], rows: [[cell]], truncated: false, affected: null, command: "SELECT", ms: 1 })
+  assert.equal(readAlertValue(result("12.5")), 12.5)
+  assert.throws(() => readAlertValue(result(null)), /NULL/)
+  assert.throws(() => readAlertValue(result("abc")), /not a number/)
+  assert.throws(() => readAlertValue({ ...result("1"), rows: [] }), /no rows/)
+  assert.equal(alertFires("above", 10, 11, null), true)
+  assert.equal(alertFires("above", 10, 10, null), false)
+  assert.equal(alertFires("below", 10, 9, null), true)
+  assert.equal(alertFires("change", 20, 130, null), false)
+  assert.equal(alertFires("change", 20, 130, 100), true)
+  assert.equal(alertFires("change", 20, 85, 100), false)
+  assert.equal(alertFires("change", 20, 1, 0), true)
+  assert.equal(describeCondition("below", 1000), "drops below 1,000")
+  assert.equal(describeCondition("change", 25), "changes by 25% or more between checks")
+  assert.equal(describeInterval(15), "every 15 min")
+  assert.equal(describeInterval(60), "every hour")
+  assert.equal(describeInterval(360), "every 6 hours")
+  assert.equal(describeInterval(1440), "every day")
+})
+
+await check("alerts: checked read-only, fired once going out of bounds, kept, and forgotten", async () => {
+  const file = path.join(dir, "alerts.json")
+  const seen: ChatEvent[] = []
+  const fired: Alert[] = []
+  const alerts = new Alerts(file, connections, (event) => seen.push(event), (alert) => fired.push(alert))
+  const base = {
+    id: null,
+    connectionId: shop.id,
+    name: "Customers",
+    sql: "SELECT count(*) FROM customers",
+    condition: "below" as const,
+    threshold: 1_000_000,
+    everyMinutes: 15,
+    enabled: true,
+  }
+
+  assert.throws(() => alerts.save({ ...base, name: " " }), /needs a name/)
+  assert.throws(() => alerts.save({ ...base, sql: "DELETE FROM customers" }), /reads/)
+  assert.throws(() => alerts.save({ ...base, connectionId: "nope" }), /no longer exists/)
+  assert.throws(() => alerts.save({ ...base, condition: "change", threshold: 0 }), /percentage above zero/)
+  assert.throws(() => alerts.save({ ...base, everyMinutes: 0 }), /every week/)
+
+  const saved = alerts.save(base)
+  assert.equal(saved.state.status, "pending")
+  // Saving starts a check; asking again waits for that one.
+  const first = await alerts.check(saved.id)
+  assert.equal(first.state.status, "triggered")
+  assert.ok(first.state.value! > 0)
+  assert.equal(fired.length, 1)
+  const again = await alerts.check(saved.id)
+  assert.equal(again.state.status, "triggered")
+  assert.equal(fired.length, 1, "still out of bounds: said once")
+  assert.equal(again.state.previous, first.state.value)
+
+  // A rename keeps what was found; a new threshold starts over.
+  assert.equal(alerts.save({ ...base, id: saved.id, name: "All customers" }).state.status, "triggered")
+  const relaxed = alerts.save({ ...base, id: saved.id, threshold: 0 })
+  assert.equal(relaxed.state.status, "pending")
+  assert.equal((await alerts.check(saved.id)).state.status, "ok")
+
+  // Not a number: said, not read as zero.
+  const broken = alerts.save({ ...base, name: "Names", sql: "SELECT name FROM customers ORDER BY 1 LIMIT 1" })
+  const failed = await alerts.check(broken.id)
+  assert.equal(failed.state.status, "error")
+  assert.match(failed.state.error!, /not a number/)
+
+  // A hidden table is refused like anywhere else.
+  connections.setPermissions(shop.id, { ...DEFAULT_PERMISSIONS, objects: [{ schema: "public", table: "customers", access: "hidden" }] })
+  try {
+    assert.match((await alerts.check(saved.id)).state.error ?? "", /hidden/)
+  } finally {
+    connections.setPermissions(shop.id, DEFAULT_PERMISSIONS)
+  }
+
+  // Due by its own interval; off is never due.
+  const later = Date.now() + 16 * 60_000
+  assert.ok(alerts.due(later).some((alert) => alert.id === saved.id))
+  assert.ok(!alerts.due(Date.now()).some((alert) => alert.id === saved.id))
+  alerts.save({ ...base, id: broken.id, name: "Names", sql: broken.sql, enabled: false })
+  assert.ok(!alerts.due(later).some((alert) => alert.id === broken.id))
+
+  assert.ok(seen.some((event) => event.type === "alert"))
+  const reread = new Alerts(file, connections, () => {}, () => {})
+  assert.deepEqual(reread.list().map((alert) => alert.name).sort(), ["Customers", "Names"])
+  reread.forget(shop.id)
+  assert.equal(reread.list().length, 0)
+  assert.equal(new Alerts(file, connections, () => {}, () => {}).list().length, 0)
+})
+
+await check("alert tools: created, changed, paused and deleted by the agent, each approved", async () => {
+  const grant = (tool: string, args: Record<string, unknown>) => grants.add(grantKey(tool, args))
+  const created = {
+    connection: "Shop",
+    name: "Pending orders",
+    sql: "SELECT count(*) FROM orders WHERE status = 'pending'",
+    condition: "above",
+    threshold: 10,
+  }
+  // Not approved: nothing is made.
+  assert.match(text(await call("save_alert", created)), /not approved/)
+  assert.equal(agentAlerts.list().length, 0)
+
+  opened.length = 0
+  grant("save_alert", created)
+  const made = await call("save_alert", created)
+  assert.equal(made.isError, undefined, text(made))
+  assert.match(text(made), /Created the alert "Pending orders".*goes above 10, checked every 15 min.*fires now/s)
+  const alert = agentAlerts.list()[0]!
+  assert.equal(alert.everyMinutes, 15)
+  assert.deepEqual(opened.at(-1), { kind: "alerts", connectionId: shop.id })
+  await agentAlerts.check(alert.id)
+
+  const listed = text(await call("list_alerts", { connection: "Shop" }))
+  assert.match(listed, new RegExp(`"Pending orders" \\(id ${alert.id}\\): fires when it goes above 10, checked every 15 min; FIRED`))
+  assert.match(listed, /status = 'pending'/)
+
+  // Changed by name: only what is passed changes; a new threshold starts over.
+  const change = { connection: "Shop", alert: "pending orders", threshold: 100000, every_minutes: 60 }
+  grant("save_alert", change)
+  const changed = await call("save_alert", change)
+  assert.match(text(changed), /Changed the alert "Pending orders".*goes above 100,000, checked every hour.*within bounds/s)
+  assert.equal(agentAlerts.list().length, 1)
+  assert.equal(agentAlerts.list()[0]!.sql, created.sql)
+
+  const pause = { connection: "Shop", alert: alert.id, enabled: false }
+  grant("save_alert", pause)
+  assert.match(text(await call("save_alert", pause)), /it is OFF/)
+  assert.match(text(await call("list_alerts", { connection: "Shop" })), /; off/)
+
+  // A query that is not one number, or that fails, saves nothing.
+  const words = { connection: "Shop", name: "Names", sql: "SELECT name FROM customers LIMIT 1", condition: "above", threshold: 1 }
+  grant("save_alert", words)
+  assert.match(text(await call("save_alert", words)), /not a number/)
+  const writes = { connection: "Shop", name: "Bad", sql: "DELETE FROM orders", condition: "above", threshold: 1 }
+  grant("save_alert", writes)
+  assert.equal((await call("save_alert", writes)).isError, true)
+  assert.equal(agentAlerts.list().length, 1)
+  const half = { connection: "Shop", name: "Half" }
+  grant("save_alert", half)
+  assert.match(text(await call("save_alert", half)), /needs name, sql, condition and threshold/)
+
+  // What the assistant may not read, it may neither watch nor be shown.
+  connections.setPermissions(shop.id, {
+    ...DEFAULT_PERMISSIONS,
+    objects: [{ schema: "public", table: "orders", access: "read", aiSchemaOnly: true }],
+  })
+  try {
+    const sneaky = { connection: "Shop", name: "Sneaky", sql: "SELECT count(*) FROM orders", condition: "above", threshold: 0 }
+    grant("save_alert", sneaky)
+    assert.match(text(await call("save_alert", sneaky)), /structure only|its data cannot be read/i)
+    assert.equal(agentAlerts.list().length, 1)
+    // The user's own alert on it still runs as them; its number is withheld here.
+    agentAlerts.save({ ...agentAlerts.list()[0]!, enabled: true })
+    await agentAlerts.check(alert.id)
+    assert.equal(agentAlerts.list()[0]!.state.status, "ok")
+    const withheld = text(await call("list_alerts", { connection: "Shop" }))
+    assert.match(withheld, /withheld/)
+    assert.doesNotMatch(withheld, /reading \d/)
+  } finally {
+    connections.setPermissions(shop.id, DEFAULT_PERMISSIONS)
+  }
+
+  const remove = { connection: "Shop", alert: "Pending orders" }
+  assert.match(text(await call("delete_alert", remove)), /not approved/)
+  grant("delete_alert", remove)
+  assert.match(text(await call("delete_alert", remove)), /Deleted the alert "Pending orders"/)
+  assert.equal(agentAlerts.list().length, 0)
+  assert.match(text(await call("list_alerts", { connection: "Shop" })), /No alerts on Shop/)
+  const gone = { connection: "Shop", alert: "Pending orders" }
+  grant("delete_alert", gone)
+  assert.match(text(await call("delete_alert", gone)), /No alert "Pending orders"/)
 })
 
 await check("audit log: kept as lines, read back after a restart, trimmed, cleared", () => {

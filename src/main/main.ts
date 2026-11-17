@@ -1,8 +1,10 @@
 import path from "node:path"
 
-import { app, BrowserWindow, nativeTheme, safeStorage, shell } from "electron"
+import { app, BrowserWindow, nativeTheme, Notification, safeStorage, shell } from "electron"
 
+import { describeCondition } from "../shared/alerts"
 import { IPC, type ChatEvent } from "../shared/api"
+import { Alerts } from "./alerts"
 import { Assist } from "./assist"
 import { AuditLog } from "./audit"
 import { Chats } from "./chats"
@@ -102,7 +104,33 @@ void app.whenReady().then(() => {
   )
   const library = new Library(dataDir, broadcast)
   const audit = new AuditLog(dataDir, broadcast)
-  const chats = new Chats(dataDir, connections, library, broadcast, audit)
+  const alerts = new Alerts(path.join(dataDir, "alerts.json"), connections, broadcast, (alert) => {
+    const connection = connections.list().find((item) => item.id === alert.connectionId)
+    audit.record({
+      actor: "you",
+      action: "alert",
+      connectionId: alert.connectionId,
+      connectionName: connection?.name ?? null,
+      status: "ok",
+      summary: `The alert "${alert.name}" fired: ${alert.state.value?.toLocaleString("en-US")} ${describeCondition(alert.condition, alert.threshold)}`,
+      sql: alert.sql,
+    })
+    if (!Notification.isSupported()) return
+    const notice = new Notification({
+      title: alert.name,
+      subtitle: connection?.name,
+      body: `${alert.state.value?.toLocaleString()} — ${describeCondition(alert.condition, alert.threshold)}`,
+    })
+    notice.on("click", () => {
+      if (!mainWindow) createWindow()
+      mainWindow?.show()
+      mainWindow?.focus()
+      broadcast({ type: "show", target: { kind: "alerts", connectionId: alert.connectionId } })
+    })
+    notice.show()
+  })
+  alerts.start()
+  const chats = new Chats(dataDir, connections, library, broadcast, audit, alerts)
   const assist = new Assist(dataDir, connections, library)
   // The OAuth client "Sign in with Google" goes through, when this build was
   // made with one (scripts/build-electron.mjs); otherwise one is imported.
@@ -130,6 +158,7 @@ void app.whenReady().then(() => {
     connections,
     chats,
     library,
+    alerts,
     assist,
     audit,
     gateway,
@@ -164,6 +193,7 @@ void app.whenReady().then(() => {
 
   app.on("before-quit", () => {
     chats.closeAll()
+    alerts.stop()
     assist.cancelAll()
     gateway.close()
     void connections.closeAll()

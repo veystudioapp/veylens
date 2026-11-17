@@ -1,4 +1,5 @@
 import {
+  Bell,
   BookOpen,
   ChevronDown,
   ChevronRight,
@@ -8,6 +9,7 @@ import {
   Eye,
   Folder,
   LayoutDashboard,
+  Network,
   PanelLeftClose,
   Pencil,
   Plus,
@@ -192,6 +194,9 @@ function ConnectionNode({
   const openDialog = useStore((state) => state.openDialog)
   const deleteConnection = useStore((state) => state.deleteConnection)
   const openKnowledge = useStore((state) => state.openKnowledge)
+  const openDiagram = useStore((state) => state.openDiagram)
+  const openAlerts = useStore((state) => state.openAlerts)
+  const allAlerts = useStore((state) => state.alerts)
   const openDashboard = useStore((state) => state.openDashboard)
   const saveDashboard = useStore((state) => state.saveDashboard)
   const deleteDashboard = useStore((state) => state.deleteDashboard)
@@ -212,6 +217,9 @@ function ConnectionNode({
       (!needle || item.title.toLowerCase().includes(needle))
   )
   const dashboardsOpen = needle ? dashboards.length > 0 : !!expanded[dashboardsKey]
+  const alerts = allAlerts.filter((item) => item.connectionId === connection.id)
+  const firing = alerts.filter((item) => item.enabled && item.state.status === "triggered").length
+  const diagrams = connection.engine !== "duckdb"
 
   // For the count beside "Business context"; cheap, and only once.
   useEffect(() => {
@@ -370,6 +378,11 @@ function ConnectionNode({
             icon: <BookOpen />,
             onSelect: () => openKnowledge(connection.id),
           },
+          {
+            label: "Alerts",
+            icon: <Bell />,
+            onSelect: () => openAlerts(connection.id),
+          },
           "separator",
           ...connectionEntries,
         ]}
@@ -406,6 +419,28 @@ function ConnectionNode({
             activeTab.connectionId === connection.id
           }
           onClick={() => openKnowledge(connection.id)}
+        />
+      )}
+
+      {open && !needle && (
+        <Row
+          depth={1}
+          icon={<Bell />}
+          tone={KIND_TONE.alert}
+          label="Alerts"
+          title="Numbers checked in the background, with a notification when out of bounds"
+          trailing={
+            firing ? (
+              <span className="flex items-center gap-1 text-[var(--tone-red)]">
+                <span className="size-1.5 rounded-full bg-[var(--tone-red)]" />
+                {firing} firing
+              </span>
+            ) : (
+              alerts.length || undefined
+            )
+          }
+          active={activeTab?.kind === "alerts" && activeTab.connectionId === connection.id}
+          onClick={() => openAlerts(connection.id)}
         />
       )}
 
@@ -497,13 +532,37 @@ function ConnectionNode({
                   tone={KIND_TONE.schema}
                   label={schema.name}
                   trailing={tables.length}
+                  active={
+                    activeTab?.kind === "diagram" &&
+                    activeTab.connectionId === connection.id &&
+                    activeTab.schema === schema.name
+                  }
                   onClick={() => toggle(schemaKey)}
+                  actions={
+                    diagrams ? (
+                      <IconButton
+                        label="Schema diagram"
+                        onClick={() => openDiagram(connection.id, schema.name)}
+                      >
+                        <Network />
+                      </IconButton>
+                    ) : undefined
+                  }
                   menu={[
                     {
                       label: "New SQL query",
                       icon: <SquareTerminal />,
                       onSelect: () => openQuery(connection.id),
                     },
+                    ...(diagrams
+                      ? [
+                          {
+                            label: "Schema diagram",
+                            icon: <Network />,
+                            onSelect: () => openDiagram(connection.id, schema.name),
+                          },
+                        ]
+                      : []),
                     {
                       label: "Refresh tables",
                       icon: <RefreshCw />,

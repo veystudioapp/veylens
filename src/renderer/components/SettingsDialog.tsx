@@ -1,6 +1,7 @@
 import {
   ArrowUpCircle,
   ArrowUpRight,
+  Bell,
   BookOpen,
   Languages,
   MessageSquare,
@@ -642,6 +643,7 @@ const GROUPS: { group: ToolGroup; icon: LucideIcon; tone: Tone }[] = [
   { group: "Read", icon: Eye, tone: "blue" },
   { group: "Show", icon: ChartColumn, tone: KIND_TONE.chart },
   { group: "Dashboards", icon: LayoutDashboard, tone: KIND_TONE.dashboard },
+  { group: "Alerts", icon: Bell, tone: KIND_TONE.alert },
   { group: "Remember", icon: BookMarked, tone: "teal" },
   { group: "Change data", icon: PencilLine, tone: "red" },
 ]

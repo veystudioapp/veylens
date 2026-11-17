@@ -330,6 +330,38 @@ export type TableDetails = {
   ddl: string
 }
 
+// ── Schema diagram ─────────────────────────────────────────────────────────
+
+/** A table as a schema diagram draws it: its columns, and which are its key. */
+export type DiagramTable = {
+  schema: string
+  name: string
+  kind: "table" | "view"
+  columns: { name: string; type: string; primaryKey: boolean; nullable: boolean }[]
+}
+
+/**
+ * A foreign key, from the columns of the table holding it to the ones they
+ * point at. `inferred` is one read off the names (`customer_id` → customers)
+ * where the database declares none — drawn, but never claimed as a key.
+ */
+export type DiagramLink = {
+  name: string
+  from: TableRef & { columns: string[] }
+  to: TableRef & { columns: string[] }
+  inferred?: boolean
+}
+
+/**
+ * A schema's tables and the keys between them. Tables of another schema that
+ * a key reaches are included, so the line has somewhere to go.
+ */
+export type SchemaDiagram = {
+  schema: string
+  tables: DiagramTable[]
+  links: DiagramLink[]
+}
+
 // ── Rows ───────────────────────────────────────────────────────────────────
 
 /** Every value travels as the text the database prints for it, or null. */
@@ -574,6 +606,58 @@ export type Knowledge = {
   metrics: Metric[]
   updatedAt: number
 }
+
+// ── Alerts ─────────────────────────────────────────────────────────────────
+
+/**
+ * When an alert fires: its number goes above or below the threshold, or —
+ * `change` — moves by at least the threshold, in percent, since the check
+ * before.
+ */
+export const ALERT_CONDITIONS = ["above", "below", "change"] as const
+export type AlertCondition = (typeof ALERT_CONDITIONS)[number]
+
+/** How often an alert may be checked, in minutes. */
+export const ALERT_INTERVALS = [5, 15, 30, 60, 360, 1440] as const
+
+/**
+ * `pending` has not been checked yet; `ok` was within bounds at the last
+ * check; `triggered` was not; `error` could not be checked.
+ */
+export type AlertStatus = "pending" | "ok" | "triggered" | "error"
+
+export type AlertState = {
+  status: AlertStatus
+  /** The number the last check read. */
+  value: number | null
+  /** The one before it: what `change` compares with. */
+  previous: number | null
+  checkedAt: number | null
+  /** When it last went from within bounds to out of them. */
+  triggeredAt: number | null
+  error: string | null
+}
+
+/**
+ * A number watched in the background: a read-only query whose first row's
+ * first column is the number, run every `everyMinutes` while the app is open,
+ * with a system notification when it goes out of bounds.
+ */
+export type Alert = {
+  id: string
+  connectionId: string
+  name: string
+  sql: string
+  condition: AlertCondition
+  threshold: number
+  everyMinutes: number
+  enabled: boolean
+  state: AlertState
+}
+
+/** An alert on its way to being saved: `id` null for a new one. Its state is
+ * kept, unless the SQL or the condition changed. */
+export type AlertInput = Omit<Alert, "id" | "state"> & { id: string | null }
 
 // ── Skills ─────────────────────────────────────────────────────────────────
 
@@ -1147,6 +1231,8 @@ export type ViewerContext = {
     | { kind: "query"; sql: string }
     | { kind: "dashboard"; title: string; tiles: string[] }
     | { kind: "knowledge" }
+    | { kind: "diagram"; schema: string }
+    | { kind: "alerts" }
     | null
   /** What the message points at with `@`, looked up as it was sent. */
   mentions?: { token: string; ref: MentionRef }[]
@@ -1164,6 +1250,8 @@ export type ViewerTarget =
     }
   | { kind: "dashboard"; connectionId: string; dashboardId: string }
   | { kind: "knowledge"; connectionId: string }
+  | { kind: "diagram"; connectionId: string; schema: string }
+  | { kind: "alerts"; connectionId: string }
 
 export type SendInput = {
   chatId: string
@@ -1191,6 +1279,7 @@ export const AUDIT_ACTIONS = [
   "permissions",
   "tools",
   "gateway",
+  "alert",
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
@@ -1237,6 +1326,10 @@ export type ChatEvent =
   | { type: "dashboard_deleted"; dashboardId: string }
   | { type: "knowledge"; connectionId: string; knowledge: Knowledge }
   | { type: "audit"; entry: AuditEntry }
+  | { type: "alert"; alert: Alert }
+  | { type: "alert_deleted"; alertId: string }
+  /** Not from a chat: a notification was clicked, or the like. */
+  | { type: "show"; target: ViewerTarget }
 
 export type AgentStatus =
   { ok: true; path: string } | { ok: false; error: string }
@@ -1286,6 +1379,14 @@ export type DesktopApi = {
   ): Promise<QueryResult>
   /** The server's plan for a statement, without running it. */
   explainQuery(connectionId: string, sql: string): Promise<QueryResult>
+  /** A schema's tables and the foreign keys between them, hidden ones left out. */
+  getSchemaDiagram(connectionId: string, schema: string): Promise<SchemaDiagram>
+
+  listAlerts(): Promise<Alert[]>
+  saveAlert(input: AlertInput): Promise<Alert>
+  deleteAlert(alertId: string): Promise<void>
+  /** Checks it now, whatever its schedule, and resolves with how it went. */
+  checkAlert(alertId: string): Promise<Alert>
 
   getKnowledge(connectionId: string): Promise<Knowledge>
   saveKnowledge(connectionId: string, knowledge: Knowledge): Promise<Knowledge>
@@ -1436,6 +1537,11 @@ export const IPC = {
   applyChanges: "db:apply",
   runQuery: "db:query",
   explainQuery: "db:explain",
+  getSchemaDiagram: "db:diagram",
+  listAlerts: "alerts:list",
+  saveAlert: "alerts:save",
+  deleteAlert: "alerts:delete",
+  checkAlert: "alerts:check",
   getKnowledge: "knowledge:get",
   saveKnowledge: "knowledge:save",
   listDashboards: "dashboards:list",

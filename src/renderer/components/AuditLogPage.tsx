@@ -1,5 +1,6 @@
 import {
   Ban,
+  Bell,
   BookOpen,
   ChevronRight,
   Copy,
@@ -48,6 +49,7 @@ const ACTION_LOOK: Record<AuditAction, { label: string; icon: LucideIcon; tone: 
   permissions: { label: "Permissions", icon: ShieldCheck, tone: "green" },
   tools: { label: "Tools", icon: Wrench, tone: "amber" },
   gateway: { label: "Gateway", icon: Waypoints, tone: "pink" },
+  alert: { label: "Alert", icon: Bell, tone: "red" },
 }
 
 /** What can be picked to narrow the list. */
@@ -64,7 +66,7 @@ const ACTORS = { all: "Anyone", you: "You", assistant: "Assistant" }
 type Actor = keyof typeof ACTORS
 
 const CHANGES = new Set<AuditAction>(["write", "edit_rows", "plan"])
-const SETTINGS = new Set<AuditAction>(["connection", "permissions", "tools", "dashboard", "context", "gateway"])
+const SETTINGS = new Set<AuditAction>(["connection", "permissions", "tools", "dashboard", "context", "gateway", "alert"])
 
 function matchesKind(entry: AuditEntry, kind: Kind): boolean {
   switch (kind) {

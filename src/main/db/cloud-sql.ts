@@ -113,6 +113,11 @@ export class CloudSqlDriver implements Driver {
     const inner = await this.ready()
     return inner.viewSources ? inner.viewSources() : []
   }
+  async diagram(schema: string) {
+    const inner = await this.ready()
+    if (!inner.diagram) throw new Error("This kind of connection has no foreign keys to draw.")
+    return inner.diagram(schema)
+  }
 
   async close(): Promise<void> {
     this.closed = true

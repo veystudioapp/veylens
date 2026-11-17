@@ -1,4 +1,5 @@
 import {
+  Bell,
   BookOpen,
   ChevronDown,
   ExternalLink,
@@ -112,6 +113,7 @@ function MetricCard({
   onChange,
   onRemove,
   onOpenQuery,
+  onAlert,
 }: {
   metric: Metric
   open: boolean
@@ -121,6 +123,7 @@ function MetricCard({
   onChange: (patch: Partial<Metric>) => void
   onRemove: () => void
   onOpenQuery: () => void
+  onAlert: () => void
 }) {
   const [test, setTest] = useState<Test | null>(null)
   const query = isQuery(metric.sql)
@@ -177,6 +180,11 @@ function MetricCard({
           )}
         </div>
         <span className="flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
+          {query && (
+            <IconButton label="Alert on this metric" onClick={onAlert}>
+              <Bell />
+            </IconButton>
+          )}
           {query && (
             <IconButton label="Open in a query tab" onClick={onOpenQuery}>
               <ExternalLink />
@@ -282,6 +290,7 @@ export function KnowledgeView({ tab, active }: { tab: KnowledgeTab; active: bool
   const loadKnowledge = useStore((state) => state.loadKnowledge)
   const saveKnowledge = useStore((state) => state.saveKnowledge)
   const openQuery = useStore((state) => state.openQuery)
+  const openAlerts = useStore((state) => state.openAlerts)
   const setChatDraft = useStore((state) => state.setDraft)
 
   const [draft, setDraft] = useState<Knowledge | null>(stored ?? null)
@@ -559,6 +568,9 @@ export function KnowledgeView({ tab, active }: { tab: KnowledgeTab; active: bool
                     onRemove={() => void removeMetric(index)}
                     onOpenQuery={() =>
                       openQuery(tab.connectionId, { sql: metric.sql, title: metric.name || "Metric" })
+                    }
+                    onAlert={() =>
+                      openAlerts(tab.connectionId, { name: metric.name || "Metric", sql: metric.sql })
                     }
                   />
                 ))}

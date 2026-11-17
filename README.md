@@ -71,6 +71,16 @@ bun run package    # electron-builder → release/
 - **Charts & dashboards** — the agent draws charts in chat (bars, lines,
   KPIs, pivots…) and can pin them to dashboards with filters, drill-downs
   and scheduled refresh.
+- **Schema diagram** — a schema's tables and the foreign keys between them,
+  laid out parents-first; pan, zoom, drag tables, find one, double-click to
+  open it. Keys a database never declared can be inferred from names
+  (`customer_id` → `customers.id`) and are drawn dashed. Copies as a Mermaid
+  `erDiagram`. Hidden tables stay hidden.
+- **Alerts** — a query that returns one number, checked read-only in the
+  background on its own schedule; a system notification when it goes above
+  or below a threshold, or moves by a percentage between checks. Started
+  from scratch, from a metric, or by asking the assistant, which can also
+  change, pause and delete them — each with your approval.
 - **Business context** — per-connection notes and named metrics the agent
   reads before answering questions.
 - **Skills** — reusable instructions for how the assistant should handle a
@@ -117,4 +127,4 @@ Adding a call across the bridge means touching `api.ts`, the preload and
 was missed.
 
 Data lives in Electron's `userData` directory (`VEYLENS_HOME` overrides it):
-`connections.json`, `library.json` and `chats/`.
+`connections.json`, `library.json`, `alerts.json` and `chats/`.

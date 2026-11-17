@@ -5,6 +5,8 @@ import {
   DEFAULT_CHAT_EFFORT,
   type AccessMode,
   type AiSettings,
+  type Alert,
+  type AlertInput,
   type AgentStatus,
   type Chat,
   type ChatImage,
@@ -63,6 +65,18 @@ export type Tab =
     }
   | { id: string; kind: "dashboard"; connectionId: string; dashboardId: string }
   | { id: string; kind: "knowledge"; connectionId: string }
+  | { id: string; kind: "diagram"; connectionId: string; schema: string }
+  | {
+      id: string
+      kind: "alerts"
+      connectionId: string
+      /** A new alert to start writing, from a metric say; a new object each
+       * time one is asked for. */
+      draft?: AlertDraft | null
+    }
+
+/** What a new alert is started from. */
+export type AlertDraft = { name: string; sql: string }
 
 export type SettingsSection =
   "ai" | "skills" | "tools" | "permissions" | "audit" | "gateway" | "updates"
@@ -92,6 +106,7 @@ type State = {
   /** Per connection, once asked for. */
   knowledge: Record<string, Knowledge>
   dashboards: Dashboard[]
+  alerts: Alert[]
   /** Text put into the composer from elsewhere, taken once. */
   draft: string | null
 
@@ -132,6 +147,8 @@ type State = {
   ): void
   openDashboard(connectionId: string, dashboardId: string): void
   openKnowledge(connectionId: string): void
+  openDiagram(connectionId: string, schema: string): void
+  openAlerts(connectionId: string, draft?: AlertDraft): void
   closeTab(tabId: string): void
   closeOtherTabs(tabId: string): void
   closeAllTabs(): void
@@ -155,6 +172,9 @@ type State = {
   saveDashboard(dashboard: Dashboard): Promise<Dashboard>
   deleteDashboard(dashboardId: string): Promise<void>
   pin(input: PinInput): Promise<Dashboard>
+  saveAlert(input: AlertInput): Promise<Alert>
+  deleteAlert(alertId: string): Promise<void>
+  checkAlert(alertId: string): Promise<Alert>
 }
 
 const api = () => window.veylens
@@ -193,7 +213,22 @@ export const useStore = create<State>((set, get) => {
       case "knowledge":
         get().openKnowledge(target.connectionId)
         return
+      case "diagram":
+        get().openDiagram(target.connectionId, target.schema)
+        return
+      case "alerts":
+        get().openAlerts(target.connectionId)
+        return
     }
+  }
+
+  function upsertAlert(alert: Alert): void {
+    const { alerts } = get()
+    set({
+      alerts: alerts.some((item) => item.id === alert.id)
+        ? alerts.map((item) => (item.id === alert.id ? alert : item))
+        : [...alerts, alert],
+    })
   }
 
   function upsertDashboard(dashboard: Dashboard): void {
@@ -283,6 +318,15 @@ export const useStore = create<State>((set, get) => {
         })
         return
       }
+      case "alert":
+        upsertAlert(event.alert)
+        return
+      case "alert_deleted":
+        set({ alerts: get().alerts.filter((item) => item.id !== event.alertId) })
+        return
+      case "show":
+        openTarget(event.target)
+        return
     }
   }
 
@@ -305,6 +349,7 @@ export const useStore = create<State>((set, get) => {
     dataVersion: {},
     knowledge: {},
     dashboards: [],
+    alerts: [],
     draft: null,
     agent: null,
     chats: [],
@@ -322,17 +367,19 @@ export const useStore = create<State>((set, get) => {
 
     async start() {
       api().onChatEvent(onChatEvent)
-      const [connections, chats, chat, agent, dashboards, ai] = await Promise.all([
+      const [connections, chats, chat, agent, dashboards, ai, alerts] = await Promise.all([
         api().listConnections(),
         api().listChats(),
         api().createChat(),
         api().agentStatus(),
         api().listDashboards(),
         api().getAiSettings(),
+        api().listAlerts(),
       ])
       set({
         ready: true,
         ai,
+        alerts,
         // The chat starts on the model and effort set in Settings.
         model: ai.models.chat.model,
         effort: ai.models.chat.effort,
@@ -409,6 +456,7 @@ export const useStore = create<State>((set, get) => {
         trees,
         knowledge,
         dashboards,
+        alerts,
       } = get()
       const remaining = tabs.filter((tab) => tab.connectionId !== id)
       const { [id]: _gone, ...restTrees } = trees
@@ -418,6 +466,7 @@ export const useStore = create<State>((set, get) => {
         trees: restTrees,
         knowledge: restKnowledge,
         dashboards: dashboards.filter((item) => item.connectionId !== id),
+        alerts: alerts.filter((item) => item.connectionId !== id),
         tabs: remaining,
         activeTabId: remaining.some((tab) => tab.id === activeTabId)
           ? activeTabId
@@ -534,6 +583,34 @@ export const useStore = create<State>((set, get) => {
       })
     },
 
+    openDiagram(connectionId, schema) {
+      const { tabs } = get()
+      const existing = tabs.find(
+        (tab) => tab.kind === "diagram" && tab.connectionId === connectionId && tab.schema === schema
+      )
+      const tab: Tab = existing ?? { id: tabId(), kind: "diagram", connectionId, schema }
+      set({
+        tabs: existing ? tabs : [...tabs, tab],
+        activeTabId: tab.id,
+        activeConnectionId: connectionId,
+      })
+    },
+
+    openAlerts(connectionId, draft) {
+      const { tabs } = get()
+      const existing = tabs.find((tab) => tab.kind === "alerts" && tab.connectionId === connectionId)
+      // A fresh object, so the page sees a second "alert on this" as new.
+      const given = draft ? { ...draft } : null
+      const tab: Tab = existing
+        ? { ...existing, ...(given ? { draft: given } : {}) }
+        : { id: tabId(), kind: "alerts", connectionId, draft: given }
+      set({
+        tabs: existing ? tabs.map((item) => (item.id === tab.id ? tab : item)) : [...tabs, tab],
+        activeTabId: tab.id,
+        activeConnectionId: connectionId,
+      })
+    },
+
     closeTab(id) {
       const { tabs, activeTabId, tabSql } = get()
       const index = tabs.findIndex((tab) => tab.id === id)
@@ -605,6 +682,10 @@ export const useStore = create<State>((set, get) => {
         }
         case "knowledge":
           return { connectionId: tab.connectionId, tab: { kind: "knowledge" } }
+        case "diagram":
+          return { connectionId: tab.connectionId, tab: { kind: "diagram", schema: tab.schema } }
+        case "alerts":
+          return { connectionId: tab.connectionId, tab: { kind: "alerts" } }
       }
     },
 
@@ -687,6 +768,23 @@ export const useStore = create<State>((set, get) => {
       const dashboard = await api().pinToDashboard(input)
       upsertDashboard(dashboard)
       return dashboard
+    },
+
+    async saveAlert(input) {
+      const alert = await api().saveAlert(input)
+      upsertAlert(alert)
+      return alert
+    },
+
+    async deleteAlert(alertId) {
+      await api().deleteAlert(alertId)
+      set({ alerts: get().alerts.filter((item) => item.id !== alertId) })
+    },
+
+    async checkAlert(alertId) {
+      const alert = await api().checkAlert(alertId)
+      upsertAlert(alert)
+      return alert
     },
   }
 })

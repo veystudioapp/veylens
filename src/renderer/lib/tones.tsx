@@ -19,6 +19,7 @@ export const KIND_TONE = {
   chart: "green",
   skill: "amber",
   tool: "blue",
+  alert: "red",
 } as const satisfies Record<string, Tone>
 
 export const toneColor = (tone: Tone) => `var(--tone-${tone})`

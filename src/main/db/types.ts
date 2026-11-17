@@ -4,11 +4,13 @@ import type {
   ChangeSet,
   CloudSql,
   DataSource,
+  DiagramTable,
   Engine,
   PlanStepResult,
   QueryResult,
   RowsRequest,
   RowsResult,
+  SchemaDiagram,
   SslMode,
   TableDetails,
   TableInfo,
@@ -73,7 +75,67 @@ export interface Driver {
   /** Each view and a table or view it reads, from the server's catalog: so
    * a view over a hidden table is hidden too. */
   viewSources?(): Promise<ViewSource[]>
+  /** A schema's tables, their columns and the foreign keys between them —
+   * for an engine that has foreign keys. */
+  diagram?(schema: string): Promise<SchemaDiagram>
   close(): Promise<void>
+}
+
+/** One column as a driver's catalogue query reads it, for `assembleDiagram`. */
+export type DiagramColumnRow = {
+  schema: string
+  table: string
+  view: boolean
+  column: string
+  type: string
+  nullable: boolean
+  primaryKey: boolean
+}
+
+/** One foreign key, its columns in order. */
+export type DiagramKeyRow = {
+  name: string
+  schema: string
+  table: string
+  columns: string[]
+  refSchema: string
+  refTable: string
+  refColumns: string[]
+}
+
+/** Column rows, in table order, and keys made into a diagram. */
+export function assembleDiagram(
+  schema: string,
+  columns: DiagramColumnRow[],
+  keys: DiagramKeyRow[]
+): SchemaDiagram {
+  const tables = new Map<string, DiagramTable>()
+  for (const row of columns) {
+    const key = JSON.stringify([row.schema, row.table])
+    let table = tables.get(key)
+    if (!table) {
+      table = { schema: row.schema, name: row.table, kind: row.view ? "view" : "table", columns: [] }
+      tables.set(key, table)
+    }
+    table.columns.push({
+      name: row.column,
+      type: row.type,
+      nullable: row.nullable,
+      primaryKey: row.primaryKey,
+    })
+  }
+  const present = (ref: string, name: string) => tables.has(JSON.stringify([ref, name]))
+  return {
+    schema,
+    tables: [...tables.values()],
+    links: keys
+      .filter((key) => present(key.schema, key.table) && present(key.refSchema, key.refTable))
+      .map((key) => ({
+        name: key.name,
+        from: { schema: key.schema, table: key.table, columns: key.columns },
+        to: { schema: key.refSchema, table: key.refTable, columns: key.refColumns },
+      })),
+  }
 }
 
 /** A statement without the semicolon or blank lines it ends with. */

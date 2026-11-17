@@ -16,6 +16,7 @@ import { describePermissions } from "../shared/permissions"
 import { errorOffset, withErrorOffset } from "../shared/sql-errors"
 import { startsLikeRead } from "../shared/statements"
 import { agentModels } from "./agent-models"
+import type { Alerts } from "./alerts"
 import type { Assist } from "./assist"
 import { describeChanges, refusal, type AuditLog } from "./audit"
 import { exportDashboard } from "./dashboard-export"
@@ -70,6 +71,7 @@ export function registerIpc({
   connections,
   chats,
   library,
+  alerts,
   assist,
   audit,
   gateway,
@@ -79,6 +81,7 @@ export function registerIpc({
   connections: Connections
   chats: Chats
   library: Library
+  alerts: Alerts
   assist: Assist
   audit: AuditLog
   gateway: Gateway
@@ -169,11 +172,12 @@ export function registerIpc({
       const record = mine(id)
       connections.delete(id)
       library.forget(id)
+      alerts.forget(id)
       audit.record({
         ...record,
         action: "connection",
         status: "ok",
-        summary: `Removed connection ${record.connectionName ?? id}, with its dashboards and context`,
+        summary: `Removed connection ${record.connectionName ?? id}, with its dashboards, alerts and context`,
       })
     },
     testConnection: (id, input) => connections.test(id, input),
@@ -285,6 +289,39 @@ export function registerIpc({
         )
       }
     },
+
+    getSchemaDiagram: (connectionId, schema) => connections.driver(connectionId).diagram(schema),
+
+    listAlerts: async () => alerts.list(),
+    saveAlert: async (input) => {
+      const before = input.id ? alerts.list().find((item) => item.id === input.id) : undefined
+      const saved = alerts.save(input)
+      audit.record({
+        ...mine(saved.connectionId),
+        action: "alert",
+        status: "ok",
+        summary: before
+          ? before.enabled !== saved.enabled
+            ? `Turned the alert "${saved.name}" ${saved.enabled ? "on" : "off"}`
+            : `Changed the alert "${saved.name}"`
+          : `Created the alert "${saved.name}"`,
+        sql: saved.sql,
+      })
+      return saved
+    },
+    deleteAlert: async (alertId) => {
+      const alert = alerts.list().find((item) => item.id === alertId)
+      alerts.remove(alertId)
+      if (alert) {
+        audit.record({
+          ...mine(alert.connectionId),
+          action: "alert",
+          status: "ok",
+          summary: `Deleted the alert "${alert.name}"`,
+        })
+      }
+    },
+    checkAlert: (alertId) => alerts.check(alertId),
 
     getKnowledge: async (connectionId) => library.knowledge(connectionId),
     saveKnowledge: async (connectionId, knowledge) => {
