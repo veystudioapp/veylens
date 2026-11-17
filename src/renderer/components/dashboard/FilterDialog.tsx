@@ -10,8 +10,6 @@ import {
   ChartNoAxesCombined,
   ChartPie,
   ChartScatter,
-  Check,
-  Copy,
   Funnel,
   Gauge,
   Grid3x3,
@@ -64,7 +62,7 @@ import { errorMessage, useStore } from "@/lib/store"
 import { IconTile } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 
-import { IconButton } from "../icon-button"
+import { CopyButton } from "../copy-button"
 import { ErrorNote } from "../state-view"
 
 const TILE_ICON: Record<ChartType, LucideIcon> = {
@@ -284,26 +282,6 @@ function Pill({ on, onClick, children }: { on: boolean; onClick: () => void; chi
     >
       {children}
     </button>
-  )
-}
-
-/** Copied to the clipboard, and says so for a moment. */
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
-  return (
-    <IconButton
-      label={copied ? "Copied" : "Copy"}
-      onClick={() => {
-        void navigator.clipboard.writeText(text)
-        setCopied(true)
-        clearTimeout(timer.current)
-        timer.current = setTimeout(() => setCopied(false), 1200)
-      }}
-    >
-      {copied ? <Check /> : <Copy />}
-    </IconButton>
   )
 }
 

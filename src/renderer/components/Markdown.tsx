@@ -1,8 +1,26 @@
-import { memo } from "react"
+import { memo, useRef, type ComponentProps } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
+import { CopyButton } from "./copy-button"
 import { SqlText } from "./sql-code"
+
+/** A code block, with a copy button that shows on hover. The button sits on a
+ * wrapper rather than in the `pre`, so it stays put when the block scrolls
+ * sideways. */
+function CodeBlock(props: ComponentProps<"pre">) {
+  const pre = useRef<HTMLPreElement>(null)
+  return (
+    <div className="code-wrap group relative">
+      <pre ref={pre} {...props} />
+      <CopyButton
+        variant="outline"
+        text={() => (pre.current?.textContent ?? "").replace(/\n$/, "")}
+        className="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+      />
+    </div>
+  )
+}
 
 /** A fence marked as SQL, in any of the spellings a model writes. */
 const SQL_FENCE = /\blanguage-(sql|postgres(ql)?|pgsql|plpgsql|mysql)\b/i
@@ -31,6 +49,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
               )}
             </code>
           ),
+          pre: ({ node: _node, ...props }) => <CodeBlock {...props} />,
           table: ({ node: _node, ...props }) => (
             <div className="table-wrap">
               <table {...props} />

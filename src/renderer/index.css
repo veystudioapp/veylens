@@ -589,7 +589,7 @@ td:hover > .cell-link[title] {
 .prose p,
 .prose ul,
 .prose ol,
-.prose pre,
+.prose .code-wrap,
 .prose blockquote,
 .prose .table-wrap {
   margin: 0.6em 0;
