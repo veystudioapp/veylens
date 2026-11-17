@@ -9,6 +9,7 @@ import {
   CalendarClock,
   Check,
   ChevronDown,
+  ClipboardList,
   Circle,
   CircleCheck,
   CircleDot,
@@ -32,6 +33,7 @@ import {
   Percent,
   Phone,
   RotateCcw,
+  Rows3,
   Settings2,
   Square,
   SquareCheck,
@@ -74,8 +76,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { columnValuesText, type CopyAs } from "@/lib/copy-values"
 import {
   detectFormat,
   displayColumn,
@@ -648,6 +654,8 @@ function CellEditor({
 function ColumnMenu({
   column,
   sorted,
+  values,
+  count,
   onSortTo,
   onEditField,
   onFit,
@@ -656,6 +664,10 @@ function ColumnMenu({
 }: {
   column: GridColumn
   sorted: Sort | null
+  /** The column's values in the rows shown, top to bottom. */
+  values: () => Cell[]
+  /** How many rows are shown — said on the copy item. */
+  count?: number
   onSortTo?: (sort: Sort | null) => void
   onEditField?: () => void
   onFit: () => void
@@ -664,6 +676,8 @@ function ColumnMenu({
   /** Absent where columns cannot be hidden, or for the last one shown. */
   onHide?: () => void
 }) {
+  const copyValues = (as: CopyAs) =>
+    void navigator.clipboard.writeText(columnValuesText(values(), column.kind, as))
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -726,6 +740,29 @@ function ColumnMenu({
           <Copy />
           Copy column name
         </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!count}
+          onClick={() => copyValues("lines")}
+          title="One per line — pastes into a spreadsheet as a column"
+        >
+          <Rows3 />
+          Copy {count ?? 0} {count === 1 ? "value" : "values"}
+        </DropdownMenuItem>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger disabled={!count}>
+            <ClipboardList />
+            Copy values as
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-52">
+            <DropdownMenuItem onClick={() => copyValues("distinct")}>
+              Distinct values, one per line
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => copyValues("csv")}>Comma-separated</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => copyValues("sql")}>
+              SQL list <span className="ml-auto font-mono text-[11px] text-muted-foreground">IN (…)</span>
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -1364,6 +1401,8 @@ export function DataGrid({
                     <ColumnMenu
                       column={column}
                       sorted={sorted}
+                      values={() => rows.map((row) => row[index] ?? null)}
+                      count={rows.length}
                       onSortTo={onSortTo}
                       onEditField={
                         onEditField

@@ -17,7 +17,7 @@ import {
   UserRound,
   X,
 } from "lucide-react"
-import { useEffect, useState, type ComponentType, type ReactNode, type SVGProps } from "react"
+import { useEffect, useRef, useState, type ClipboardEvent as PasteEvent, type ComponentType, type ReactNode, type SVGProps } from "react"
 
 import { addressOf, sourceLabel } from "@shared/address"
 import {
@@ -503,6 +503,12 @@ export function ConnectionDialog({
   }, [engine, host, port, user, password, database, ssl, via, instance, ipType, auth, sources])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A failure is said at the foot of a scrolling form: bring it into view.
+  const errorRef = useRef<HTMLDivElement>(null)
+  const failure = error ?? (probe.state === "failed" ? probe.text : null)
+  useEffect(() => {
+    if (failure) errorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+  }, [failure])
 
   const cloudSql: CloudSql | null = cloud ? { instance: instance.trim(), ipType, auth } : null
   /** What the name is when none is typed: where it goes. */
@@ -530,8 +536,9 @@ export function ConnectionDialog({
       : {
     engine,
     name: name.trim() || `${where}${database ? `/${database}` : ""}`,
-    host,
-    port: Number(port),
+    host: host.trim(),
+    // Left empty, the port is the engine's usual one.
+    port: Number(port) || DEFAULT_PORT[engine],
     user,
     database,
     ssl,
@@ -570,6 +577,48 @@ export function ConnectionDialog({
     setPasting(false)
   }
 
+  /** A connection URL pasted into any field fills in all of them. */
+  const pasteAnywhere = (event: PasteEvent) => {
+    if (files) return
+    const text = event.clipboardData.getData("text")
+    if (!parseConnectionUrl(text)) return
+    event.preventDefault()
+    fill(text)
+  }
+
+  /** The link reads the clipboard straight away; only when that holds no
+   * URL (or cannot be read) is a box opened to paste into. */
+  const pasteFromClipboard = async () => {
+    if (pasting) {
+      setPasting(false)
+      return
+    }
+    try {
+      const text = await navigator.clipboard.readText()
+      if (parseConnectionUrl(text)) {
+        fill(text)
+        return
+      }
+    } catch {
+      // No clipboard access: paste by hand below.
+    }
+    setPasted(null)
+    setPasting(true)
+  }
+
+  /** What has to be there before it can be tested or added. */
+  const missing = files
+    ? sources.length === 0
+      ? "Add a file or a Google Sheet"
+      : null
+    : cloud
+      ? !instance.trim()
+        ? "Enter the instance connection name"
+        : null
+      : !host.trim()
+        ? "Enter a host"
+        : null
+
   const test = async () => {
     setProbe({ state: "running" })
     try {
@@ -584,6 +633,7 @@ export function ConnectionDialog({
   }
 
   const submit = async () => {
+    if (missing || saving) return
     setSaving(true)
     setError(null)
     try {
@@ -606,15 +656,21 @@ export function ConnectionDialog({
         if (!open) close(null)
       }}
     >
-      <DialogContent className="flex max-h-[calc(100%-4rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[520px]">
+      <DialogContent className="flex max-h-[calc(100%-4rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[640px]">
         {/* Which server it is, at a glance: the engine's mark, the name, where. */}
-        <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 pr-12">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl border bg-background shadow-xs">
+        <DialogHeader className="flex-row items-center gap-3 border-b px-6 py-4 pr-12">
+          {/* The colour shows on the mark as it is picked, as it will in the explorer. */}
+          <span className="relative flex size-11 shrink-0 items-center justify-center rounded-xl border bg-background shadow-xs">
             <Logo className="size-6" aria-hidden />
+            <span
+              aria-hidden
+              className="absolute -right-1 -bottom-1 size-3.5 rounded-full border-2 border-popover transition-colors"
+              style={{ background: toneColor(connectionTone({ engine, color })) }}
+            />
           </span>
           <div className="min-w-0 flex-1">
             <DialogTitle className="truncate text-[15px]">
-              {existing ? existing.name : "New connection"}
+              {existing ? name.trim() || existing.name : "New connection"}
             </DialogTitle>
             <DialogDescription className="truncate font-mono text-[11px]">
               {ENGINE_OF[engine].label} · {summary}
@@ -623,10 +679,18 @@ export function ConnectionDialog({
         </DialogHeader>
 
         <form
-          className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-4"
+          className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 py-5"
           onSubmit={(event) => {
             event.preventDefault()
             void submit()
+          }}
+          onPaste={pasteAnywhere}
+          onKeyDown={(event) => {
+            // ⌘↵ tests, as it is the step before adding.
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !missing && probe.state !== "running") {
+              event.preventDefault()
+              void test()
+            }
           }}
         >
           <div className="flex flex-col gap-1.5">
@@ -635,11 +699,12 @@ export function ConnectionDialog({
               {!files && (
               <button
                 type="button"
-                onClick={() => setPasting(!pasting)}
+                onClick={() => void pasteFromClipboard()}
+                title="Or paste a postgres:// or mysql:// URL into any field"
                 className="flex items-center gap-1 rounded text-xs text-primary hover:underline"
               >
                 <ClipboardPaste className="size-3.5" />
-                Paste a connection URL
+                {pasting ? "Close" : "Paste a connection URL"}
               </button>
               )}
             </div>
@@ -650,6 +715,13 @@ export function ConnectionDialog({
                   aria-label="Connection URL"
                   placeholder={`${engine === "postgres" ? "postgres" : "mysql"}://user:password@host:${DEFAULT_PORT[engine]}/database`}
                   onChange={(event) => fill(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.stopPropagation()
+                      setPasting(false)
+                    }
+                  }}
+                  aria-invalid={pasted === "bad" || undefined}
                   className="font-mono text-xs md:text-xs"
                 />
                 <p className={cn("text-[11px]", pasted === "bad" ? "text-destructive" : "text-muted-foreground")}>
@@ -660,12 +732,35 @@ export function ConnectionDialog({
               </div>
             )}
             {pasted === "ok" && !pasting && (
-              <p className="flex items-center gap-1 text-[11px] text-success">
+              <p className="flex items-center gap-1 rounded-md bg-success/10 px-2 py-1 text-[11px] text-success">
                 <Check className="size-3" />
                 Filled in from the URL. Check the fields, then test.
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={() => setPasted(null)}
+                  className="ml-auto flex size-4 items-center justify-center rounded hover:bg-success/15"
+                >
+                  <X className="size-3" />
+                </button>
               </p>
             )}
-            <div role="radiogroup" aria-label="Engine" className="grid grid-cols-3 gap-2">
+            <div
+              role="radiogroup"
+              aria-label="Engine"
+              className="grid grid-cols-3 gap-2"
+              onKeyDown={(event) => {
+                const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key]
+                if (!step) return
+                event.preventDefault()
+                const at = ENGINES.findIndex((item) => item.value === engine)
+                const next = ENGINES[(at + step + ENGINES.length) % ENGINES.length]!
+                pickEngine(next.value)
+                event.currentTarget
+                  .querySelector<HTMLButtonElement>(`[data-engine="${next.value}"]`)
+                  ?.focus()
+              }}
+            >
               {ENGINES.map((item) => {
                 const on = engine === item.value
                 return (
@@ -673,19 +768,21 @@ export function ConnectionDialog({
                     key={item.value}
                     type="button"
                     role="radio"
+                    data-engine={item.value}
                     aria-checked={on}
                     aria-label={item.label}
+                    tabIndex={on ? 0 : -1}
                     onClick={() => pickEngine(item.value)}
                     className={cn(
-                      "relative flex items-center gap-3 rounded-lg border bg-background px-3 py-2.5 text-left transition-colors outline-offset-2",
+                      "relative flex items-center gap-3 rounded-lg border bg-background py-2.5 pr-7 pl-3 text-left transition-colors outline-offset-2",
                       on
                         ? "border-primary bg-primary/[0.04] ring-1 ring-primary dark:bg-primary/10"
-                        : "hover:bg-accent/50"
+                        : "hover:border-foreground/20 hover:bg-accent/50"
                     )}
                   >
                     <item.logo className="size-7 shrink-0" aria-hidden />
                     <span className="min-w-0">
-                      <span className="block text-[13px] font-medium">{item.label}</span>
+                      <span className="block truncate text-[13px] font-medium">{item.label}</span>
                       <span className="block truncate text-[11px] text-muted-foreground">
                         {item.hint}
                       </span>
@@ -744,7 +841,7 @@ export function ConnectionDialog({
             </div>
 
             {cloud ? (
-              <div className="grid grid-cols-[1fr_168px] gap-3">
+              <div className="grid grid-cols-[1fr_200px] gap-3">
                 <Field id="connection-instance" label="Instance connection name">
                   <Input
                     id="connection-instance"
@@ -770,7 +867,7 @@ export function ConnectionDialog({
                 </div>
               </div>
             ) : (
-            <div className="grid grid-cols-[1fr_104px] gap-3">
+            <div className="grid grid-cols-[1fr_120px] gap-3">
               <Field id="connection-host" label="Host">
                 <Input
                   id="connection-host"
@@ -778,7 +875,19 @@ export function ConnectionDialog({
                   spellCheck={false}
                   autoFocus={!existing && !pasting}
                   placeholder="db.example.com"
+                  // The default is there to be typed over.
+                  onFocus={(event) => {
+                    if (!existing && host === "127.0.0.1") event.currentTarget.select()
+                  }}
                   onChange={(event) => setHost(event.target.value)}
+                  onPaste={(event) => {
+                    // `host:port` pasted in one go goes to both fields.
+                    const split = /^([^:\s/]+):(\d{1,5})$/.exec(event.clipboardData.getData("text").trim())
+                    if (!split) return
+                    event.preventDefault()
+                    setHost(split[1]!)
+                    setPort(split[2]!)
+                  }}
                   className="font-mono text-[13px]"
                 />
               </Field>
@@ -787,6 +896,8 @@ export function ConnectionDialog({
                   id="connection-port"
                   value={port}
                   inputMode="numeric"
+                  maxLength={5}
+                  placeholder={String(DEFAULT_PORT[engine])}
                   onChange={(event) => setPort(event.target.value.replace(/[^\d]/g, ""))}
                   className="font-mono text-[13px] tabular-nums"
                 />
@@ -835,8 +946,14 @@ export function ConnectionDialog({
                 </div>
               </Field>
             </div>
+            {!iam && (
+              <p className="-mt-1.5 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
+                <KeyRound className="size-3" />
+                Kept in this machine&apos;s keychain, never shown again.
+              </p>
+            )}
 
-            <div className="grid grid-cols-[1fr_168px] gap-3">
+            <div className="grid grid-cols-[1fr_200px] gap-3">
               <Field id="connection-database" label="Database">
                 <Input
                   id="connection-database"
@@ -881,13 +998,9 @@ export function ConnectionDialog({
                 connection itself. It signs in to Google as this machine&apos;s
                 default credentials (<code>gcloud auth application-default login</code>);
                 that account needs the Cloud SQL Client role.
-                {iam ? ` ${IAM_USER[engine as ServerEngine]}` : " The password is kept in this machine's keychain."}
+                {iam && ` ${IAM_USER[engine as ServerEngine]}`}
               </p>
-            ) : (
-              <p className="-mt-1 text-[11px] text-muted-foreground">
-                The password is kept in this machine&apos;s keychain, never shown again.
-              </p>
-            )}
+            ) : null}
           </fieldset>
           )}
 
@@ -979,21 +1092,26 @@ export function ConnectionDialog({
           {/* So Enter in any field saves, as a form should. */}
           <button type="submit" hidden />
 
-          {(probe.state === "failed" || error) && (
-            <ErrorNote>{error ?? (probe.state === "failed" ? probe.text : "")}</ErrorNote>
+          {failure && (
+            <div ref={errorRef} className="scroll-mb-4">
+              <ErrorNote>{failure}</ErrorNote>
+            </div>
           )}
         </form>
 
-        <div className="flex shrink-0 items-center gap-2 border-t bg-muted/40 px-5 py-3">
+        <div className="flex shrink-0 items-center gap-2 border-t bg-muted/40 px-6 py-3">
           <Button
             variant="outline"
             onClick={test}
-            disabled={
-              probe.state === "running" || (files ? sources.length === 0 : !(cloud ? instance : host).trim())
-            }
+            title={missing ?? "Test the connection (⌘↵)"}
+            disabled={probe.state === "running" || !!missing}
           >
-            {probe.state === "running" && <Spinner className="size-3.5" />}
-            Test
+            {probe.state === "running" ? (
+              <Spinner className="size-3.5" />
+            ) : probe.state === "ok" ? (
+              <CircleCheck className="text-success" />
+            ) : null}
+            {probe.state === "failed" ? "Retry" : "Test"}
           </Button>
           <span
             role="status"
@@ -1016,11 +1134,12 @@ export function ConnectionDialog({
               </>
             )}
             {probe.state === "running" && <span>{files ? "Reading…" : "Connecting…"}</span>}
+            {probe.state === "idle" && missing && <span className="truncate">{missing}</span>}
           </span>
           <Button variant="ghost" onClick={() => close(null)}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={saving}>
+          <Button onClick={submit} disabled={saving || !!missing} title={missing ?? undefined}>
             {saving && <Spinner className="size-3.5" />}
             {existing ? "Save" : "Add connection"}
           </Button>
