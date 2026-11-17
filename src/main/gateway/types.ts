@@ -1,6 +1,7 @@
 import type { Duplex } from "node:stream"
 
 import type { ConnectionConfig } from "../db/types"
+import type { ObservedQuery } from "./observe"
 
 /** The server a session goes to: a saved connection, signed in to with its
  * own user and password. */
@@ -32,6 +33,9 @@ export type Gate = {
   /** Postgres: an app asking for a running query of one of its sessions to
    * be cancelled. */
   cancel?: (pid: number, key: Buffer) => void
+  /** Each statement the app runs once signed in, as it completes. Absent,
+   * the session is not watched at all. */
+  observe?: (query: ObservedQuery) => void
 }
 
 /** How long either side may take over its part of signing in. */

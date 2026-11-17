@@ -2,6 +2,7 @@ import { createHash, createHmac, pbkdf2, randomBytes, timingSafeEqual } from "no
 import type { Duplex } from "node:stream"
 import { promisify } from "node:util"
 
+import { postgresTap } from "./observe"
 import { HANDSHAKE_MS, type Gate, type Target } from "./types"
 import { Reader, cstring, join, messageOf, samePassword, upgrade, within } from "./wire"
 
@@ -348,7 +349,13 @@ export async function servePostgres(app: Duplex, gate: Gate): Promise<void> {
       }
       if (next.type === "Z") break
     }
-    join(app, appReader.release(), server.stream, server.reader.release())
+    join(
+      app,
+      appReader.release(),
+      server.stream,
+      server.reader.release(),
+      gate.observe ? postgresTap(gate.observe) : undefined
+    )
   } catch {
     app.destroy()
   }

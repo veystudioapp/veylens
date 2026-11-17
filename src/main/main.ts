@@ -169,6 +169,11 @@ void app.whenReady().then(() => {
       if (!window.isDestroyed()) window.webContents.send(IPC.gatewayState, state)
     }
   })
+  gateway.watchQueries((batch) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send(IPC.gatewayQueryBatch, batch)
+    }
+  })
   registerIpc({
     connections,
     chats,

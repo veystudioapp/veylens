@@ -324,6 +324,8 @@ export function describeContext(
     lines.push("tab: the business context editor (notes and metrics)")
   } else if (tab?.kind === "diagram") {
     lines.push(`tab: the diagram of schema ${tab.schema} (its tables and the foreign keys between them)`)
+  } else if (tab?.kind === "queries") {
+    lines.push(`tab: the query inspector of the gateway "${tab.gateway}" (statements an app under development ran through it)`)
   } else if (tab?.kind === "alerts") {
     lines.push("tab: the alerts page (numbers checked in the background, with a notification when out of bounds)")
   } else {

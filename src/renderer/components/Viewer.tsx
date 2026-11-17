@@ -1,4 +1,5 @@
 import {
+  Activity,
   Bell,
   BookOpen,
   Check,
@@ -43,6 +44,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { ENGINE_LABEL } from "@/lib/engines"
+import { useGateway } from "@/lib/gateway"
 import { useStore, type Tab } from "@/lib/store"
 import {
   connectionTone,
@@ -59,6 +61,7 @@ import { AlertsView } from "./AlertsView"
 import { DashboardView } from "./DashboardView"
 import { DiagramView } from "./DiagramView"
 import { KnowledgeView } from "./KnowledgeView"
+import { QueryInspector } from "./QueryInspector"
 import { QueryView } from "./QueryView"
 import { IconButton } from "./icon-button"
 import { ConnectArt } from "./illustrations"
@@ -86,7 +89,9 @@ function TabIcon({ tab }: { tab: Tab }) {
             ? [<Network />, KIND_TONE.schema]
             : tab.kind === "alerts"
               ? [<Bell />, KIND_TONE.alert]
-              : isView
+              : tab.kind === "queries"
+                ? [<Activity />, KIND_TONE.gateway]
+                : isView
             ? [<Eye />, KIND_TONE.view]
             : [<Table2 />, KIND_TONE.table]
   return (
@@ -105,6 +110,9 @@ function useTabLabel(tab: Tab): { label: string; title: string } {
   )
   const connection = useStore((state) =>
     state.connections.find((item) => item.id === tab.connectionId)
+  )
+  const gateway = useGateway((store) =>
+    tab.kind === "queries" ? store.state?.gateways.find((item) => item.id === tab.gatewayId) : undefined
   )
   switch (tab.kind) {
     case "table":
@@ -127,6 +135,10 @@ function useTabLabel(tab: Tab): { label: string; title: string } {
       }
     case "alerts":
       return { label: "Alerts", title: `Alerts · ${connection?.name ?? ""}` }
+    case "queries": {
+      const label = `${gateway?.name ?? "Gateway"} queries`
+      return { label, title: `What apps run through ${gateway?.name ?? "the gateway"}` }
+    }
   }
 }
 
@@ -436,6 +448,8 @@ const Panel = memo(function Panel({ tab, active }: { tab: Tab; active: boolean }
       return <DiagramView tab={tab} active={active} />
     case "alerts":
       return <AlertsView tab={tab} active={active} />
+    case "queries":
+      return <QueryInspector tab={tab} active={active} />
   }
 })
 

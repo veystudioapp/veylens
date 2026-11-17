@@ -83,14 +83,22 @@ export function cstring(buffer: Buffer, offset: number): [string, number] {
 /**
  * The two streams joined once both sides have signed in: what each had
  * already sent past its handshake goes first. Either end closing closes the
- * other.
+ * other. A `tap` is shown every byte each way, as it goes — it reads, it
+ * never holds anything up or changes it.
  */
 export function join(
   app: Duplex,
   appRest: Buffer,
   server: Duplex,
-  serverRest: Buffer
+  serverRest: Buffer,
+  tap?: { app: (chunk: Buffer) => void; server: (chunk: Buffer) => void }
 ): void {
+  if (tap) {
+    if (serverRest.length) tap.server(serverRest)
+    if (appRest.length) tap.app(appRest)
+    app.on("data", tap.app)
+    server.on("data", tap.server)
+  }
   if (serverRest.length) app.write(serverRest)
   if (appRest.length) server.write(appRest)
   const close = () => {

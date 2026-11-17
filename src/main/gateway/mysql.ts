@@ -1,6 +1,7 @@
 import { constants, createHash, publicEncrypt, randomBytes, timingSafeEqual } from "node:crypto"
 import type { Duplex } from "node:stream"
 
+import { mysqlTap } from "./observe"
 import { HANDSHAKE_MS, type Gate, type Target } from "./types"
 import { Reader, cstring, join, messageOf, upgrade, within } from "./wire"
 
@@ -281,7 +282,7 @@ async function signIn(
   reader: Reader,
   greeting: Greeting,
   app: Response
-): Promise<{ stream: Duplex; reader: Reader; ok: Buffer }> {
+): Promise<{ stream: Duplex; reader: Reader; ok: Buffer; flags: number }> {
   const { config } = target
   const tlsWanted = !target.secure && config.ssl !== "off"
   const database = config.database || app.database
@@ -335,7 +336,7 @@ async function signIn(
     seq = reply.seq + 1
     const { payload } = reply
     const kind = payload[0]
-    if (kind === 0x00) return { stream, reader, ok: payload }
+    if (kind === 0x00) return { stream, reader, ok: payload, flags }
     if (kind === 0xff) throw new ServerRefused(payload)
     if (kind === 0xfe) {
       // Switch to another plugin, with a challenge of its own.
@@ -447,7 +448,7 @@ export async function serveMysql(app: Duplex, gate: Gate): Promise<void> {
     // The gateway knows the password, so the "cached" path always holds.
     if (plugin === SHA2) app.write(packet(++seq, Buffer.from([1, 3])))
 
-    let signedIn: { stream: Duplex; reader: Reader; ok: Buffer }
+    let signedIn: { stream: Duplex; reader: Reader; ok: Buffer; flags: number }
     try {
       signedIn = await within(
         signIn(target, server, serverReader, greeting, response),
@@ -462,7 +463,15 @@ export async function serveMysql(app: Duplex, gate: Gate): Promise<void> {
     }
     if (signedIn.stream !== server) gate.attached(signedIn.stream)
     app.write(packet(seq + 1, signedIn.ok))
-    join(app, appReader.release(), signedIn.stream, signedIn.reader.release())
+    join(
+      app,
+      appReader.release(),
+      signedIn.stream,
+      signedIn.reader.release(),
+      // Results are framed as agreed with the server — the app's abilities,
+      // which the gateway passed on as they were.
+      gate.observe ? mysqlTap(signedIn.flags, gate.observe) : undefined
+    )
   } catch {
     app.destroy()
     server.destroy()

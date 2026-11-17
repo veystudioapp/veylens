@@ -232,7 +232,37 @@ export type GatewayStatus = {
   error: string | null
   /** App connections open through it now. */
   sessions: number
+  /** Whether the statements apps run through it are being kept. */
+  recording: boolean
 }
+
+/**
+ * One statement an app ran through a gateway, as the gateway saw it go by.
+ * Kept in memory only, a few thousand per gateway, and never written down:
+ * the SQL and its values may be anyone's data.
+ */
+export type GatewayQuery = {
+  /** Increasing, across gateways. */
+  id: number
+  gatewayId: string
+  /** Which app connection: numbered as they arrive. */
+  session: number
+  /** The saved connection it went to. */
+  connectionId: string | null
+  /** When the app sent it, ms since the epoch. */
+  at: number
+  /** From the app sending it to the server's answer being complete. */
+  ms: number
+  sql: string
+  /** Values bound to `$1`, `$2`…, as text; null when none could be read. */
+  params: string[] | null
+  command: string | null
+  rows: number | null
+  error: string | null
+}
+
+/** Statements just seen, sent in bursts to whoever is watching. */
+export type GatewayQueryBatch = { queries: GatewayQuery[] }
 
 export type GatewayState = {
   gateways: GatewaySettings[]
@@ -1233,6 +1263,7 @@ export type ViewerContext = {
     | { kind: "knowledge" }
     | { kind: "diagram"; schema: string }
     | { kind: "alerts" }
+    | { kind: "queries"; gateway: string }
     | null
   /** What the message points at with `@`, looked up as it was sent. */
   mentions?: { token: string; ref: MentionRef }[]
@@ -1252,6 +1283,7 @@ export type ViewerTarget =
   | { kind: "knowledge"; connectionId: string }
   | { kind: "diagram"; connectionId: string; schema: string }
   | { kind: "alerts"; connectionId: string }
+  | { kind: "queries"; connectionId: string; gatewayId: string }
 
 export type SendInput = {
   chatId: string
@@ -1464,6 +1496,13 @@ export type DesktopApi = {
   resetGatewayPassword(gatewayId: string): Promise<GatewayState>
   /** Ports opening or failing, sessions coming and going, a switch. */
   onGatewayState(listener: (state: GatewayState) => void): () => void
+  /** The statements kept of a gateway, oldest first. */
+  gatewayQueries(gatewayId: string): Promise<GatewayQuery[]>
+  clearGatewayQueries(gatewayId: string): Promise<void>
+  /** Keeps, or stops keeping, what apps run through it. */
+  setGatewayRecording(gatewayId: string, recording: boolean): Promise<GatewayState>
+  /** Statements as they are seen, a few times a second at most. */
+  onGatewayQueries(listener: (batch: GatewayQueryBatch) => void): () => void
 
   /** This build's version. */
   appVersion(): Promise<string>
@@ -1587,6 +1626,10 @@ export const IPC = {
   switchGateway: "gateway:switch",
   resetGatewayPassword: "gateway:reset-password",
   gatewayState: "gateway:state",
+  gatewayQueries: "gateway:queries",
+  clearGatewayQueries: "gateway:clear-queries",
+  setGatewayRecording: "gateway:recording",
+  gatewayQueryBatch: "gateway:query-batch",
   appVersion: "app:version",
   checkForUpdate: "update:check",
   installUpdate: "update:install",

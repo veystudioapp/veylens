@@ -87,6 +87,12 @@ bun run package    # electron-builder → release/
   kind of task, built-in or your own.
 - **Gateways** — a local port that forwards to a chosen saved connection,
   so an app's `.env` never has to change.
+- **Query inspector** — every statement an app runs through a gateway, as
+  it runs: its time, rows, bound values and errors (Postgres simple and
+  extended protocol, MySQL text and prepared). Grouped by statement, with
+  N+1 bursts and what set them off, and slow ones, picked out; EXPLAIN one,
+  open it in a SQL tab, or ask the assistant to fix it. The bytes go through
+  untouched — a copy is read — and what is seen stays in memory.
 - **Audit log** — every statement, edit and refusal made through the app.
 
 ## Keeping the agent in its lane

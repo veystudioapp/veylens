@@ -442,6 +442,9 @@ export function registerIpc({
       }
       return state
     },
+    gatewayQueries: async (gatewayId) => gateway.queries(gatewayId),
+    clearGatewayQueries: async (gatewayId) => gateway.clearQueries(gatewayId),
+    setGatewayRecording: async (gatewayId, recording) => gateway.setRecording(gatewayId, recording),
     resetGatewayPassword: async (gatewayId) => {
       const state = gateway.resetPassword(gatewayId)
       const changed = state.gateways.find((item) => item.id === gatewayId)

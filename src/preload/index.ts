@@ -4,6 +4,7 @@ import {
   IPC,
   type ChatEvent,
   type DesktopApi,
+  type GatewayQueryBatch,
   type GatewayState,
   type UpdateProgress,
 } from "../shared/api"
@@ -116,6 +117,18 @@ const api: DesktopApi = {
     ipcRenderer.on(IPC.gatewayState, handler)
     return () => {
       ipcRenderer.off(IPC.gatewayState, handler)
+    }
+  },
+
+  gatewayQueries: (gatewayId) => ipcRenderer.invoke(IPC.gatewayQueries, gatewayId),
+  clearGatewayQueries: (gatewayId) => ipcRenderer.invoke(IPC.clearGatewayQueries, gatewayId),
+  setGatewayRecording: (gatewayId, recording) =>
+    ipcRenderer.invoke(IPC.setGatewayRecording, gatewayId, recording),
+  onGatewayQueries: (listener) => {
+    const handler = (_event: IpcRendererEvent, payload: GatewayQueryBatch) => listener(payload)
+    ipcRenderer.on(IPC.gatewayQueryBatch, handler)
+    return () => {
+      ipcRenderer.off(IPC.gatewayQueryBatch, handler)
     }
   },
 

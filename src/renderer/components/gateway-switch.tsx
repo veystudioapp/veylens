@@ -1,4 +1,4 @@
-import { CircleAlert } from "lucide-react"
+import { Activity, CircleAlert } from "lucide-react"
 
 import type { Connection, GatewaySettings, GatewayState } from "@shared/api"
 
@@ -10,6 +10,7 @@ import { useStore } from "@/lib/store"
 import { connectionTone, toneColor } from "@/lib/tones"
 
 import { confirm } from "./confirm"
+import { IconButton } from "./icon-button"
 import { SimpleSelect } from "./simple-select"
 
 
@@ -60,9 +61,11 @@ function GatewayLine({
   const live = connections.find((connection) => connection.id === gateway.active)
   const Logo = ENGINE_LOGO[gateway.engine]
   const busy = switching?.gatewayId === gateway.id
+  const openQueries = useStore((store) => store.openQueries)
 
   return (
     <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-0.5">
       <Tooltip>
         <TooltipTrigger
           render={
@@ -91,6 +94,15 @@ function GatewayLine({
           ].join("\n")}
         </TooltipContent>
       </Tooltip>
+      <span className="flex-1" />
+      <IconButton
+        label="What the app runs: statements, N+1, slow queries"
+        onClick={() => openQueries(gateway.id, gateway.active)}
+        className="size-6"
+      >
+        <Activity />
+      </IconButton>
+      </div>
       <SimpleSelect
         label={`${gateway.name}: connection`}
         value={live?.id ?? ""}

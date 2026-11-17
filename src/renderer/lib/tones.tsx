@@ -20,6 +20,7 @@ export const KIND_TONE = {
   skill: "amber",
   tool: "blue",
   alert: "red",
+  gateway: "pink",
 } as const satisfies Record<string, Tone>
 
 export const toneColor = (tone: Tone) => `var(--tone-${tone})`

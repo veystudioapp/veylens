@@ -24,12 +24,26 @@ import path from "node:path"
 
 import { Connections } from "../src/main/connections"
 import { checkGatewaySettings, Gateway } from "../src/main/gateway"
-import { nativeToken, serveMysql, sha2Token } from "../src/main/gateway/mysql"
+import { errPayload, nativeToken, serveMysql, sha2Token } from "../src/main/gateway/mysql"
+import {
+  MYSQL_DEPRECATE_EOF,
+  mysqlTap,
+  postgresTap,
+  type ObservedQuery,
+} from "../src/main/gateway/observe"
+import {
+  findNPlusOne,
+  fingerprint,
+  groupQueries,
+  inlinePostgresParams,
+  isNoise,
+  slowQueries,
+} from "../src/shared/query-insights"
 import { Scram, servePostgres } from "../src/main/gateway/postgres"
 import type { Gate, Target } from "../src/main/gateway/types"
 import { Reader, cstring } from "../src/main/gateway/wire"
 import type { ConnectionConfig } from "../src/main/db/types"
-import type { GatewaySettings } from "../src/shared/api"
+import type { GatewayQuery, GatewayQueryBatch, GatewaySettings } from "../src/shared/api"
 import { openSamplePostgres, Wire } from "./sample-postgres"
 
 let failed = 0
@@ -662,6 +676,306 @@ await check("gateway: settings from before version 2 are dropped", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ── What apps run through it ───────────────────────────────────────────────
+
+await check("observe: postgres statements are seen as they run, simple and extended, values and errors", async () => {
+  const seen: ObservedQuery[] = []
+  const client = viaGateway(gate(pgTarget, { observe: (query) => seen.push(query) }))
+  await client.connect()
+  await client.query("select count(*) from orders")
+  // With values: the extended protocol, as ORMs use it.
+  const { rows } = await client.query("select id, status from orders where id = $1 and status = $2", [7, "shipped"])
+  await assert.rejects(client.query("select nope from orders"))
+  await client.query("select 1; select id from orders limit 3")
+  await client.query("update orders set note = note where id = $1", [null])
+  // The sample server does not close on Terminate, so this is not waited on.
+  void client.end()
+
+  assert.equal(seen.length, 5)
+  assert.equal(seen[0]!.sql, "select count(*) from orders")
+  assert.equal(seen[0]!.command, "SELECT")
+  assert.equal(seen[0]!.rows, 1)
+  assert.equal(seen[0]!.error, null)
+  assert.equal(seen[1]!.sql, "select id, status from orders where id = $1 and status = $2")
+  assert.deepEqual(seen[1]!.params, ["7", "shipped"])
+  assert.equal(seen[1]!.rows, rows.length)
+  assert.match(seen[2]!.error!, /column "nope" does not exist \(42703\)/)
+  assert.equal(seen[3]!.rows, 3, "a script: its last statement's rows")
+  assert.equal(seen[4]!.command, "UPDATE")
+  assert.deepEqual(seen[4]!.params, ["NULL"])
+  for (const query of seen) {
+    assert.ok(query.ms >= 0 && query.ms < 5000)
+    assert.ok(Math.abs(query.at - Date.now()) < 10_000)
+  }
+})
+
+await check("observe: a large result goes by uncopied and is counted", async () => {
+  const seen: ObservedQuery[] = []
+  const client = viaGateway(gate(pgTarget, { observe: (query) => seen.push(query) }))
+  await client.connect()
+  const started = performance.now()
+  const { rowCount } = await client.query("select n, repeat('x', 200) as pad from generate_series(1, 50000) n")
+  const took = performance.now() - started
+  void client.end()
+  assert.equal(rowCount, 50000)
+  assert.equal(seen[0]!.rows, 50000)
+  assert.ok(took < 4000, `took ${Math.round(took)} ms`)
+})
+
+await check("observe: a watcher that cannot follow stops, and the session goes on", async () => {
+  let calls = 0
+  const client = viaGateway(
+    gate(pgTarget, {
+      observe: () => {
+        calls++
+        throw new Error("a watcher with a bug")
+      },
+    })
+  )
+  await client.connect()
+  await client.query("select 1")
+  const { rows } = await client.query("select count(*)::int as n from orders")
+  assert.ok(rows[0].n > 0)
+  void client.end()
+  assert.equal(calls, 1, "stopped after its first failure")
+})
+
+/** Postgres messages as a server or a client writes them. */
+const pgMessage = (type: string, ...parts: (string | Buffer | number)[]) => {
+  const body = Buffer.concat(
+    parts.map((part) =>
+      typeof part === "number"
+        ? Buffer.from([part >> 8, part & 0xff])
+        : typeof part === "string"
+          ? Buffer.from(`${part}\0`)
+          : part
+    )
+  )
+  const header = Buffer.alloc(5)
+  header.write(type, 0, "latin1")
+  header.writeInt32BE(body.length + 4, 1)
+  return Buffer.concat([header, body])
+}
+
+await check("observe: pipelined executes, an error skipping the rest to Sync, framing across chunks", () => {
+  const seen: ObservedQuery[] = []
+  const tap = postgresTap((query) => seen.push(query))
+  const int32 = (value: number) => {
+    const buffer = Buffer.alloc(4)
+    buffer.writeInt32BE(value)
+    return buffer
+  }
+  const bind = (portal: string, statement: string, value: string) =>
+    pgMessage("B", portal, statement, 0, 1, Buffer.concat([int32(value.length), Buffer.from(value)]), 0)
+  const fromApp = Buffer.concat([
+    pgMessage("P", "s1", "select * from t where id = $1", 0),
+    bind("", "s1", "1"),
+    pgMessage("E", "", int32(0)),
+    bind("", "s1", "2"),
+    pgMessage("E", "", int32(0)),
+    pgMessage("S"),
+    pgMessage("P", "", "select broken", 0),
+    pgMessage("B", "", "", 0, 0, 0),
+    pgMessage("E", "", int32(0)),
+    bind("", "s1", "3"),
+    pgMessage("E", "", int32(0)),
+    pgMessage("S"),
+  ])
+  // In pieces as small as a byte: a message split anywhere still reads.
+  for (let offset = 0; offset < fromApp.length; offset += 3) tap.app(fromApp.subarray(offset, offset + 3))
+  // A result's rows go by without being kept.
+  const row = pgMessage("D", 1, Buffer.concat([int32(1000), Buffer.alloc(1000, 0x61)]))
+  tap.server(
+    Buffer.concat([
+      pgMessage("1"),
+      pgMessage("2"),
+      row,
+      row,
+      pgMessage("C", "SELECT 2"),
+      pgMessage("2"),
+      pgMessage("C", "SELECT 0"),
+      pgMessage("Z", Buffer.from("I")),
+      pgMessage("E", "SERROR", "C42703", 'Mcolumn "broken" does not exist', Buffer.alloc(0)),
+      pgMessage("Z", Buffer.from("I")),
+    ])
+  )
+  assert.deepEqual(
+    seen.map((query) => [query.sql, query.params, query.rows, query.error]),
+    [
+      ["select * from t where id = $1", ["1"], 2, null],
+      ["select * from t where id = $1", ["2"], 0, null],
+      ["select broken", null, null, 'column "broken" does not exist (42703)'],
+      // The execute after the error never ran: not shown as if it had.
+    ]
+  )
+})
+
+const mysqlRows = (deprecateEof: boolean, rows: number, more = false) => {
+  const packets: { length?: number; payload: Buffer }[] = [{ payload: Buffer.from([2]) }]
+  packets.push({ payload: Buffer.from("column one") }, { payload: Buffer.from("column two") })
+  if (!deprecateEof) packets.push({ payload: Buffer.from([0xfe, 0, 0, 2, 0]) })
+  for (let index = 0; index < rows; index++) packets.push({ payload: Buffer.from([1, 0x61, 1, 0x62]) })
+  const status = more ? 0x0a : 0x02
+  packets.push({
+    payload: deprecateEof ? Buffer.from([0xfe, 0, 0, status, 0, 0, 0]) : Buffer.from([0xfe, 0, 0, status, 0]),
+  })
+  return packets
+}
+
+await check("observe: mysql results framed with and without EOF packets, errors, prepared statements", () => {
+  for (const deprecateEof of [false, true]) {
+    const seen: ObservedQuery[] = []
+    const tap = mysqlTap(deprecateEof ? MYSQL_DEPRECATE_EOF : 0, (query) => seen.push(query))
+    const send = (side: "app" | "server", seq: number, payload: Buffer) => tap[side](mysqlPacket(seq, payload))
+    const command = (code: number, text: string | Buffer) =>
+      send("app", 0, Buffer.concat([Buffer.from([code]), typeof text === "string" ? Buffer.from(text) : text]))
+
+    command(0x03, "SELECT a, b FROM t")
+    mysqlRows(deprecateEof, 3).forEach((item, index) => send("server", index + 1, item.payload))
+    command(0x03, "UPDATE t SET a = 1")
+    send("server", 1, Buffer.from([0, 4, 0, 2, 0, 0, 0]))
+    command(0x03, "SELECT nope")
+    send("server", 1, errPayload(1054, "42S22", "Unknown column 'nope'"))
+    command(0x0e, "") // a ping: answered, not a statement
+    send("server", 1, Buffer.from([0, 0, 0, 2, 0, 0, 0]))
+    // Two result sets for one CALL.
+    command(0x03, "CALL two()")
+    let seq = 1
+    for (const item of [...mysqlRows(deprecateEof, 1, true), ...mysqlRows(deprecateEof, 2)]) send("server", seq++, item.payload)
+    // Prepared: the statement learned from PREPARE, run by EXECUTE.
+    command(0x16, "SELECT a FROM t WHERE id = ?")
+    const prepared = Buffer.from([0, 9, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0])
+    send("server", 1, prepared)
+    send("server", 2, Buffer.from("param"))
+    if (!deprecateEof) send("server", 3, Buffer.from([0xfe, 0, 0, 2, 0]))
+    send("server", deprecateEof ? 3 : 4, Buffer.from("column"))
+    if (!deprecateEof) send("server", 5, Buffer.from([0xfe, 0, 0, 2, 0]))
+    command(0x17, Buffer.from([9, 0, 0, 0, 0, 1, 0, 0, 0]))
+    mysqlRows(deprecateEof, 1).forEach((item, index) => send("server", index + 1, Buffer.concat([item.payload])))
+
+    assert.deepEqual(
+      seen.map((query) => [query.sql, query.command, query.rows, query.error?.replace(/ \(\d+\)$/, "") ?? null]),
+      [
+        ["SELECT a, b FROM t", "SELECT", 3, null],
+        ["UPDATE t SET a = 1", "UPDATE", 4, null],
+        ["SELECT nope", "SELECT", null, "Unknown column 'nope'"],
+        ["CALL two()", "CALL", 3, null],
+        ["SELECT a FROM t WHERE id = ?", "SELECT", 1, null],
+      ],
+      `deprecateEof ${deprecateEof}`
+    )
+  }
+})
+
+await check("observe: mysql statements through the gateway", async () => {
+  const seen: ObservedQuery[] = []
+  const target = mysqlTarget("sha2-fast", {})
+  const connection = await mysql.createConnection({
+    user: "app_user",
+    password: PASSWORD,
+    database: "app_db",
+    stream: () => {
+      const [app, gatewaySide] = pair("app")
+      void serveMysql(gatewaySide, gate(target, { observe: (query) => seen.push(query) }))
+      return app as never
+    },
+  })
+  await connection.query("DO 7")
+  await connection.query("DO 3")
+  await connection.end()
+  assert.deepEqual(seen.map((query) => [query.sql, query.rows]), [["DO 7", 7], ["DO 3", 3]])
+})
+
+await check("gateway: what apps run is kept per gateway, sent in bursts, paused, and cleared", async () => {
+  const { dir, save, gateway, app, create } = harness()
+  try {
+    const batches: GatewayQueryBatch[] = []
+    gateway.watchQueries((batch) => batches.push(batch))
+    const shop = create({ name: "Shop", connections: [save("PG", "pg").id] })
+    assert.equal(gateway.state().status[0]!.recording, true)
+    const pool = app(shop.id)
+    for (let id = 1; id <= 6; id++) await pool.query("select * from customers where id = $1", [id])
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const kept = gateway.queries(shop.id)
+    assert.equal(kept.length, 6)
+    assert.ok(kept.every((query) => query.gatewayId === shop.id && query.session === kept[0]!.session))
+    assert.ok(kept[0]!.connectionId)
+    assert.deepEqual(kept.map((query) => query.params), [["1"], ["2"], ["3"], ["4"], ["5"], ["6"]])
+    assert.ok(kept.every((query, index) => index === 0 || query.id > kept[index - 1]!.id))
+    assert.equal(batches.flatMap((batch) => batch.queries).length, 6)
+    assert.ok(batches.length < 6, "sent together, not one by one")
+
+    gateway.setRecording(shop.id, false)
+    assert.equal(gateway.state().status[0]!.recording, false)
+    await pool.query("select 1")
+    assert.equal(gateway.queries(shop.id).length, 6)
+    gateway.setRecording(shop.id, true)
+    gateway.clearQueries(shop.id)
+    assert.equal(gateway.queries(shop.id).length, 0)
+    await pool.end()
+    gateway.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check("insights: one statement whatever its values, N+1 bursts and what set them off, values written in", () => {
+  assert.equal(
+    fingerprint("SELECT * FROM users WHERE id = 42 AND name = 'O''Brien' -- who\n"),
+    "select * from users where id = ? and name = ?"
+  )
+  assert.equal(fingerprint("select * from t where id in (1, 2, 3)"), "select * from t where id in (?…)")
+  assert.equal(fingerprint("select * from t where id in ($1,$2)"), "select * from t where id in (?…)")
+  assert.equal(fingerprint("insert into t values (1, 'a'), (2, 'b'), (3, 'c')"), "insert into t values (?…), …")
+  assert.equal(fingerprint('select "col1", t2.x from t2 where v > 1.5e3'), 'select "col1", t2.x from t2 where v > ?')
+  assert.equal(fingerprint("select $tag$ x $tag$"), "select ?")
+  assert.ok(isNoise("BEGIN") && isNoise("set search_path to x") && isNoise("SELECT 1") && !isNoise("select 1 from t"))
+
+  let id = 0
+  const query = (session: number, at: number, sql: string, params: string[] | null = null, ms = 2): GatewayQuery => ({
+    id: ++id, gatewayId: "g", session, connectionId: "c", at, ms, sql, params, command: "SELECT", rows: 1, error: null,
+  })
+  const list = [
+    query(1, 0, "select * from orders limit 20", null, 9),
+    ...Array.from({ length: 8 }, (_, index) => query(1, 20 + index * 10, "select * from customers where id = $1", [String(index)])),
+    // Interleaved: a second relation loaded per row.
+    ...Array.from({ length: 6 }, (_, index) => query(1, 25 + index * 10, "select * from products where id = $1", [String(index)])),
+    // The same burst on another connection is its own.
+    ...Array.from({ length: 3 }, (_, index) => query(2, index, "select * from customers where id = $1", [String(index)])),
+    // Too far apart: not a burst.
+    ...Array.from({ length: 6 }, (_, index) => query(3, index * 5000, "select * from customers where id = $1", ["1"])),
+    // Identical every time: a cache, not a join.
+    ...Array.from({ length: 5 }, (_, index) => query(4, index * 3, "select * from settings where key = 'theme'")),
+    query(1, 500, "BEGIN"),
+  ]
+  const found = findNPlusOne(list)
+  assert.deepEqual(
+    found.map((item) => [item.session, item.fingerprint, item.queries.length, item.identical]),
+    [
+      [1, "select * from customers where id = ?", 8, false],
+      [1, "select * from products where id = ?", 6, false],
+      [4, "select * from settings where key = ?", 5, true],
+    ]
+  )
+  assert.equal(found[0]!.trigger?.sql, "select * from orders limit 20")
+  assert.equal(found[0]!.totalMs, 16)
+
+  const groups = groupQueries(list)
+  const customers = groups.find((group) => group.fingerprint === "select * from customers where id = ?")!
+  assert.equal(customers.count, 17)
+  assert.equal(customers.sessions, 3)
+  assert.deepEqual(slowQueries(list, 5).map((item) => item.sql), ["select * from orders limit 20"])
+
+  assert.equal(
+    inlinePostgresParams("select * from t where id = $1 and n = $2 and s = '$1' -- $2", ["7", "O'Brien"]),
+    "select * from t where id = '7' and n = 'O''Brien' and s = '$1' -- $2"
+  )
+  assert.equal(inlinePostgresParams("select $1", ["NULL"]), "select NULL")
+  assert.equal(inlinePostgresParams("select $1", ["<binary>"]), null)
+  assert.equal(inlinePostgresParams("select $2", ["1"]), null)
+  assert.equal(inlinePostgresParams("select 1", null), "select 1")
 })
 
 await sample.close()

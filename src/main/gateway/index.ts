@@ -7,11 +7,18 @@ import type { Duplex } from "node:stream"
 
 import { AuthTypes, Connector } from "@google-cloud/cloud-sql-connector"
 
-import type { Engine, GatewaySettings, GatewayState } from "../../shared/api"
+import type {
+  Engine,
+  GatewayQuery,
+  GatewayQueryBatch,
+  GatewaySettings,
+  GatewayState,
+} from "../../shared/api"
 import type { Connections } from "../connections"
 import { IP_TYPE, withHint } from "../db/cloud-sql"
 import type { ConnectionConfig } from "../db/types"
 import { serveMysql } from "./mysql"
+import type { ObservedQuery } from "./observe"
 import { cancelPostgres, servePostgres } from "./postgres"
 import type { Gate, Target } from "./types"
 import { within } from "./wire"
@@ -28,8 +35,16 @@ const CONNECT_MS = 10_000
 
 const newPassword = () => randomBytes(18).toString("base64url")
 
+/** Statements kept per gateway; the oldest go first. */
+export const QUERIES_KEPT = 5000
+
+/** How often what was seen is sent on, at most. */
+const QUERY_BATCH_MS = 250
+
 /** One app connection: which gateway it came in on, where it went. */
 type Session = {
+  /** Numbered as they arrive, for telling an app's connections apart. */
+  number: number
   gatewayId: string
   /** Null until it has signed in to the gateway. */
   connectionId: string | null
@@ -113,6 +128,15 @@ export class Gateway {
     { key: string; connector: Connector; stream: Promise<() => Duplex> }
   >()
   private notifyTimer: NodeJS.Timeout | null = null
+  private sessionCount = 0
+  private queryCount = 0
+  /** Per gateway, oldest first. In memory only: never written down. */
+  private readonly queryLog = new Map<string, GatewayQuery[]>()
+  /** Gateways whose statements are not being kept. Kept is the default. */
+  private readonly paused = new Set<string>()
+  private unsent: GatewayQuery[] = []
+  private batchTimer: NodeJS.Timeout | null = null
+  private queryListener: ((batch: GatewayQueryBatch) => void) | null = null
 
   constructor(
     private readonly file: string,
@@ -195,9 +219,58 @@ export class Gateway {
           listening: listener?.listening ?? false,
           error: listener?.error ?? null,
           sessions,
+          recording: !this.paused.has(gateway.id),
         }
       }),
     }
+  }
+
+  // ── What apps run through it ─────────────────────────────────────────────
+
+  /** Who is told of statements as they are seen. */
+  watchQueries(listener: (batch: GatewayQueryBatch) => void): void {
+    this.queryListener = listener
+  }
+
+  queries(gatewayId: string): GatewayQuery[] {
+    return (this.queryLog.get(gatewayId) ?? []).slice(-QUERIES_KEPT)
+  }
+
+  clearQueries(gatewayId: string): void {
+    this.queryLog.delete(gatewayId)
+  }
+
+  setRecording(gatewayId: string, recording: boolean): GatewayState {
+    this.gateway(gatewayId)
+    if (recording) this.paused.delete(gatewayId)
+    else this.paused.add(gatewayId)
+    this.changed()
+    return this.state()
+  }
+
+  private record(session: Session, query: ObservedQuery): void {
+    if (this.paused.has(session.gatewayId)) return
+    const entry: GatewayQuery = {
+      ...query,
+      id: ++this.queryCount,
+      gatewayId: session.gatewayId,
+      session: session.number,
+      connectionId: session.connectionId,
+    }
+    const log = this.queryLog.get(session.gatewayId) ?? []
+    log.push(entry)
+    // Trimmed in steps rather than on every statement, which would shift
+    // thousands of entries each time.
+    if (log.length > QUERIES_KEPT + 500) log.splice(0, log.length - QUERIES_KEPT)
+    this.queryLog.set(session.gatewayId, log)
+    if (!this.queryListener) return
+    this.unsent.push(entry)
+    this.batchTimer ??= setTimeout(() => {
+      this.batchTimer = null
+      const queries = this.unsent
+      this.unsent = []
+      this.queryListener?.({ queries })
+    }, QUERY_BATCH_MS)
   }
 
   /** Tells the renderer, once for a burst of changes. */
@@ -227,6 +300,8 @@ export class Gateway {
   remove(gatewayId: string): GatewayState {
     this.gateway(gatewayId)
     this.gateways = this.gateways.filter((item) => item.id !== gatewayId)
+    this.queryLog.delete(gatewayId)
+    this.paused.delete(gatewayId)
     this.persist()
     this.dropMoved()
     this.reconcile()
@@ -345,6 +420,7 @@ export class Gateway {
     // A reset ends the session; it is no error of this process.
     app.on("error", () => {})
     const session: Session = {
+      number: ++this.sessionCount,
       gatewayId,
       connectionId: null,
       target: null,
@@ -378,6 +454,7 @@ export class Gateway {
         session.key = { pid, key }
       },
       cancel: (pid, key) => this.cancel(pid, key),
+      observe: (query) => this.record(session, query),
     }
     void (engine === "mysql" ? serveMysql(app, gate) : servePostgres(app, gate))
   }
@@ -479,5 +556,6 @@ export class Gateway {
     for (const entry of this.connectors.values()) entry.connector.close()
     this.connectors.clear()
     if (this.notifyTimer) clearTimeout(this.notifyTimer)
+    if (this.batchTimer) clearTimeout(this.batchTimer)
   }
 }

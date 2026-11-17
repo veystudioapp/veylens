@@ -74,6 +74,11 @@ export type Tab =
        * time one is asked for. */
       draft?: AlertDraft | null
     }
+  | QueriesTab
+
+/** The statements an app ran through a gateway. `connectionId` is where the
+ * gateway went when it was opened: what EXPLAIN runs on. */
+export type QueriesTab = { id: string; kind: "queries"; connectionId: string; gatewayId: string }
 
 /** What a new alert is started from. */
 export type AlertDraft = { name: string; sql: string }
@@ -149,6 +154,7 @@ type State = {
   openKnowledge(connectionId: string): void
   openDiagram(connectionId: string, schema: string): void
   openAlerts(connectionId: string, draft?: AlertDraft): void
+  openQueries(gatewayId: string, connectionId: string | null): void
   closeTab(tabId: string): void
   closeOtherTabs(tabId: string): void
   closeAllTabs(): void
@@ -218,6 +224,9 @@ export const useStore = create<State>((set, get) => {
         return
       case "alerts":
         get().openAlerts(target.connectionId)
+        return
+      case "queries":
+        get().openQueries(target.gatewayId, target.connectionId)
         return
     }
   }
@@ -596,6 +605,22 @@ export const useStore = create<State>((set, get) => {
       })
     },
 
+    openQueries(gatewayId, connectionId) {
+      const { tabs } = get()
+      const existing = tabs.find((tab) => tab.kind === "queries" && tab.gatewayId === gatewayId)
+      const tab: Tab = existing ?? {
+        id: tabId(),
+        kind: "queries",
+        connectionId: connectionId ?? "",
+        gatewayId,
+      }
+      set({
+        tabs: existing ? tabs : [...tabs, tab],
+        activeTabId: tab.id,
+        ...(tab.connectionId ? { activeConnectionId: tab.connectionId } : {}),
+      })
+    },
+
     openAlerts(connectionId, draft) {
       const { tabs } = get()
       const existing = tabs.find((tab) => tab.kind === "alerts" && tab.connectionId === connectionId)
@@ -686,6 +711,8 @@ export const useStore = create<State>((set, get) => {
           return { connectionId: tab.connectionId, tab: { kind: "diagram", schema: tab.schema } }
         case "alerts":
           return { connectionId: tab.connectionId, tab: { kind: "alerts" } }
+        case "queries":
+          return { connectionId: tab.connectionId || activeConnectionId, tab: { kind: "queries", gateway: tab.gatewayId } }
       }
     },
 

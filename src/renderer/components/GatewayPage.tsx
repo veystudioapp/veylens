@@ -1,4 +1,5 @@
 import {
+  Activity,
   Check,
   ChevronDown,
   CircleAlert,
@@ -130,6 +131,8 @@ function GatewayCard({ gateway, status }: { gateway: GatewaySettings; status: Ga
   const switching = useGateway((store) => store.switching)
   const resetPassword = useGateway((store) => store.resetPassword)
   const all = useStore((store) => store.connections)
+  const openQueries = useStore((store) => store.openQueries)
+  const openSettings = useStore((store) => store.openSettings)
   const connections = useGatewayConnections(gateway)
   const pick = usePick(gateway)
   const [showEnv, setShowEnv] = useState(false)
@@ -191,6 +194,19 @@ function GatewayCard({ gateway, status }: { gateway: GatewaySettings; status: Ga
           <span className="size-1.5 shrink-0 rounded-full bg-current" />
           <span className="truncate">{state.text}</span>
         </span>
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-muted-foreground"
+          title="Every statement the app runs through it, with N+1 bursts and slow ones picked out"
+          onClick={() => {
+            openQueries(gateway.id, gateway.active)
+            openSettings(null)
+          }}
+        >
+          <Activity />
+          Queries
+        </Button>
         <Switch checked={gateway.enabled} label="Gateway on" onChange={(enabled) => push({ enabled })} />
         <IconButton label="Delete gateway" onClick={() => void destroy()}>
           <Trash2 />
