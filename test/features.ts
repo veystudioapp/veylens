@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
-import { tileText, type ChatEvent, type ChatItem as ChatItemT, type ViewerTarget } from "../src/shared/api"
+import { DEFAULT_AI_SETTINGS, tileText, type ChatEvent, type ChatItem as ChatItemT, type ViewerTarget } from "../src/shared/api"
 import {
   anomalies,
   bridge,
@@ -36,7 +36,7 @@ import {
   numberOrNull,
   quoteLiteral,
 } from "../src/shared/params"
-import { assistPrompt, readAnswer } from "../src/main/assist"
+import { assistPrompt, readAnswer, summaryPrompt, summaryRequest } from "../src/main/assist"
 import { AUDIT_KEEP, AuditLog, describeChanges, refusal } from "../src/main/audit"
 import { Chats, describeContext, plainPreview } from "../src/main/chats"
 import {
@@ -1787,6 +1787,30 @@ await check("assist: the structured answer, or the reply's SQL block", () => {
     sql: "select 2;",
     text: "Here:\n```sql\nselect 2;\n```\nDone.",
   })
+})
+
+await check("assist: a dashboard's summary is asked with the filters' values in its SQL", () => {
+  const dashboard = {
+    id: "d1",
+    connectionId: "c1",
+    title: "Ops",
+    refreshSeconds: 0,
+    filters: [
+      { id: "b", kind: "select", name: "status", label: "Status", optionsSql: "x", value: "paid" },
+    ],
+    tiles: [
+      { id: "t1", title: "Orders", sql: "select count(*) from orders where status = {{status}}", chart: { type: "kpi" }, text: null },
+      { id: "t2", title: "", sql: "", chart: null, text: "## Notes" },
+    ],
+  } as unknown as Parameters<typeof summaryRequest>[0]
+  const target = { id: "c1", name: "Shop", engine: "postgres" as const, database: "shop" }
+  const asked = summaryRequest(dashboard, target, { column: "region", value: "EU" })
+  assert.match(asked, /where status = 'paid'/)
+  assert.match(asked, /- Status: paid/)
+  assert.match(asked, /2\. Text: ## Notes/)
+  assert.match(asked, /region = EU/)
+  assert.doesNotMatch(asked, /\{\{status\}\}/)
+  assert.match(summaryPrompt({ ...DEFAULT_AI_SETTINGS, language: "Vietnamese" }), /in Vietnamese/)
 })
 
 await driver.close()

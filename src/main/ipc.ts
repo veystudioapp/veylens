@@ -342,6 +342,7 @@ export function registerIpc({
 
     assistSql: (input) => assist.run(input),
     cancelAssist: async (requestId) => assist.cancel(requestId),
+    summarizeDashboard: (input) => assist.summarize(input),
 
     agentStatus: () => chats.status(),
     agentModels: (fresh) => agentModels(fresh),

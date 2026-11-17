@@ -72,6 +72,7 @@ const api: DesktopApi = {
 
   assistSql: (input) => ipcRenderer.invoke(IPC.assistSql, input),
   cancelAssist: (requestId) => ipcRenderer.invoke(IPC.cancelAssist, requestId),
+  summarizeDashboard: (input) => ipcRenderer.invoke(IPC.summarizeDashboard, input),
 
   agentStatus: () => ipcRenderer.invoke(IPC.agentStatus),
   agentModels: (fresh) => ipcRenderer.invoke(IPC.agentModels, fresh),

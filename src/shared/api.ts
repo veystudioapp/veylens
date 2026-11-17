@@ -945,6 +945,17 @@ export type AssistResult = {
   text: string
 }
 
+/** A dashboard's Summarise, answered in the dashboard rather than the chat. */
+export type DashboardSummaryInput = {
+  /** Chosen by the caller, so that it can be cancelled with `cancelAssist`. */
+  requestId: string
+  dashboardId: string
+  /** What a click on a tile narrowed the rest to, if anything. */
+  cross?: { column: string; value: Cell } | null
+  model: string | null
+  effort: ChatEffort | null
+}
+
 // ── Models ─────────────────────────────────────────────────────────────────
 
 /** `--effort`, weakest first — the CLI's own words, as in Vey. */
@@ -1319,6 +1330,8 @@ export type DesktopApi = {
   /** One question about the SQL in an editor, answered by the agent. */
   assistSql(input: AssistInput): Promise<AssistResult>
   cancelAssist(requestId: string): Promise<void>
+  /** What stands out on a dashboard, as Markdown, without touching the chat. */
+  summarizeDashboard(input: DashboardSummaryInput): Promise<string>
 
   agentStatus(): Promise<AgentStatus>
   /** The models the user's `claude` offers. `fresh` asks again. */
@@ -1447,6 +1460,7 @@ export const IPC = {
   setPermissions: "connections:permissions",
   assistSql: "assist:sql",
   cancelAssist: "assist:cancel",
+  summarizeDashboard: "assist:dashboard-summary",
   agentStatus: "agent:status",
   agentModels: "agent:models",
   listChats: "chats:list",

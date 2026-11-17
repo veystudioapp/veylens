@@ -18,6 +18,7 @@ import {
   Timer,
   Trash2,
   Type,
+  X,
 } from "lucide-react"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
@@ -259,6 +260,88 @@ function Placeholder({ kind }: { kind: "figure" | "chart" | "rows" }) {
         />
       ))}
     </div>
+  )
+}
+
+type Summary =
+  | { state: "running"; requestId: string }
+  | { state: "done"; text: string; at: Date; paramsKey: string }
+  | { state: "failed"; error: string }
+
+/** Summarise's answer, on the dashboard above its tiles. */
+function SummaryPanel({
+  summary,
+  stale,
+  onAgain,
+  onCancel,
+  onClose,
+}: {
+  summary: Summary
+  stale: boolean
+  onAgain: () => void
+  onCancel: () => void
+  onClose: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <section
+      aria-label="Summary"
+      className="mx-4 mt-3 flex max-h-[45vh] min-h-0 shrink-0 flex-col rounded-lg border bg-card shadow-xs"
+    >
+      <header className="flex h-9 shrink-0 items-center gap-1.5 border-b px-3">
+        <Sparkles className="size-3.5" style={toneStyle("pink")} />
+        <h3 className="text-[13px] font-semibold">Summary</h3>
+        {summary.state === "done" && (
+          <span className="truncate text-[11px] text-muted-foreground">
+            {stale
+              ? "· the filters changed since — summarise again for the current view"
+              : `· ${summary.at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`}
+          </span>
+        )}
+        <span className="flex-1" />
+        {summary.state === "running" ? (
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={onCancel}>
+            Cancel
+          </Button>
+        ) : (
+          <>
+            {summary.state === "done" && (
+              <IconButton
+                label={copied ? "Copied" : "Copy"}
+                onClick={() => {
+                  void navigator.clipboard.writeText(summary.text).then(() => {
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 1500)
+                  })
+                }}
+              >
+                <Copy />
+              </IconButton>
+            )}
+            <IconButton label="Summarise again" onClick={onAgain}>
+              <RefreshCw />
+            </IconButton>
+          </>
+        )}
+        <IconButton label="Close summary" onClick={onClose}>
+          <X />
+        </IconButton>
+      </header>
+      <div className="min-h-0 overflow-y-auto px-4 py-3 text-[13px]">
+        {summary.state === "running" ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Spinner className="size-3.5" />
+            Reading the tiles and comparing with the previous period…
+          </div>
+        ) : summary.state === "failed" ? (
+          <ErrorNote>{summary.error}</ErrorNote>
+        ) : (
+          <div className={cn(stale && "opacity-60")}>
+            <Markdown text={summary.text} />
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -602,8 +685,8 @@ export function DashboardView({ tab, active }: { tab: DashboardTab; active: bool
     state.connections.find((item) => item.id === tab.connectionId)
   )
   const dataVersion = useStore((state) => state.dataVersion[tab.connectionId] ?? 0)
-  const chatBusy = useStore((state) => state.chat?.busy ?? false)
-  const send = useStore((state) => state.send)
+  const model = useStore((state) => state.model)
+  const effort = useStore((state) => state.effort)
   const setDraft = useStore((state) => state.setDraft)
   const openQuery = useStore((state) => state.openQuery)
   const saveDashboard = useStore((state) => state.saveDashboard)
@@ -615,8 +698,17 @@ export function DashboardView({ tab, active }: { tab: DashboardTab; active: bool
   const [editing, setEditing] = useState<DashboardTile | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [dragging, setDragging] = useState<string | null>(null)
+  const [summary, setSummary] = useState<Summary | null>(null)
   const [grid, columns] = useColumns()
   const sheet = useRef<HTMLDivElement>(null)
+  // The summary being written, so a closed tab does not leave it running.
+  const summarizing = useRef<string | null>(null)
+  useEffect(
+    () => () => {
+      if (summarizing.current) void window.veylens.cancelAssist(summarizing.current)
+    },
+    []
+  )
 
   // Data the agent changed is data every tile may show.
   useEffect(() => {
@@ -676,13 +768,38 @@ export function DashboardView({ tab, active }: { tab: DashboardTab; active: bool
     }
   }
 
-  const summarize = () => {
-    const scope = dashboard.filters
-      .map((filter) => `${filter.label}: ${filterValueLabel(filter)}`)
-      .join("; ")
-    void send(
-      `Summarise the dashboard "${dashboard.title}"${scope ? ` (${scope})` : ""}: what stands out, what changed against the previous period, and anything that needs attention. Read it with get_dashboard and run its tiles' queries with the current filter values.`
-    ).catch((failure) => setError(errorMessage(failure)))
+  // What the summary was written for: the filters and a tile's selection.
+  const summaryKey = JSON.stringify([params, cross?.column, cross?.value])
+
+  const summarize = async () => {
+    if (summarizing.current) void window.veylens.cancelAssist(summarizing.current)
+    const requestId = crypto.randomUUID()
+    const key = summaryKey
+    summarizing.current = requestId
+    setSummary({ state: "running", requestId })
+    const settle = (next: Summary) => {
+      if (summarizing.current !== requestId) return
+      summarizing.current = null
+      setSummary(next)
+    }
+    try {
+      const text = await window.veylens.summarizeDashboard({
+        requestId,
+        dashboardId: dashboard.id,
+        cross: cross ? { column: cross.column, value: cross.value } : null,
+        model,
+        effort,
+      })
+      settle({ state: "done", text, at: new Date(), paramsKey: key })
+    } catch (failure) {
+      settle({ state: "failed", error: errorMessage(failure) })
+    }
+  }
+
+  const stopSummary = () => {
+    if (summarizing.current) void window.veylens.cancelAssist(summarizing.current)
+    summarizing.current = null
+    setSummary(null)
   }
 
   /** The tiles as they stand, with what they are scoped to written above them. */
@@ -745,11 +862,15 @@ export function DashboardView({ tab, active }: { tab: DashboardTab; active: bool
         <Button
           variant="outline"
           size="sm"
-          disabled={chatBusy || dashboard.tiles.length === 0}
-          title={chatBusy ? "The assistant is busy" : "Ask the assistant what stands out"}
-          onClick={summarize}
+          disabled={summary?.state === "running" || dashboard.tiles.length === 0}
+          title="Ask the assistant what stands out, here on the dashboard"
+          onClick={() => void summarize()}
         >
-          <Sparkles style={toneStyle("pink")} />
+          {summary?.state === "running" ? (
+            <Spinner className="size-3.5" />
+          ) : (
+            <Sparkles style={toneStyle("pink")} />
+          )}
           Summarise
         </Button>
         <DropdownMenu>
@@ -850,6 +971,16 @@ export function DashboardView({ tab, active }: { tab: DashboardTab; active: bool
       />
 
       {error && <ErrorNote className="mx-4 mt-3">{error}</ErrorNote>}
+
+      {summary && (
+        <SummaryPanel
+          summary={summary}
+          stale={summary.state === "done" && summary.paramsKey !== summaryKey}
+          onAgain={() => void summarize()}
+          onCancel={stopSummary}
+          onClose={stopSummary}
+        />
+      )}
 
       <div ref={grid} className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         {dashboard.tiles.length === 0 ? (

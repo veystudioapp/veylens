@@ -3,7 +3,19 @@ import path from "node:path"
 
 import { query } from "@anthropic-ai/claude-agent-sdk"
 
-import type { AiSettings, AssistInput, AssistResult } from "../shared/api"
+import {
+  isTextTile,
+  tileText,
+  type AiSettings,
+  type AssistInput,
+  type AssistResult,
+  type Cell,
+  type ChatEffort,
+  type Connection,
+  type Dashboard,
+  type DashboardSummaryInput,
+} from "../shared/api"
+import { filterValueLabel, filterValues, inlineParameters } from "../shared/params"
 import { createDbTools, TOOL_PREFIX, TOOL_SERVER } from "./agent-tools"
 import { claudeEnvironment, locateClaude } from "./claude-bin"
 import type { Connections } from "./connections"
@@ -79,8 +91,67 @@ function request(input: AssistInput, connection: string): string {
   }
 }
 
+const SUMMARY_PROMPT_BASE = `You are the analyst built into the dashboards of Vey Lens, a desktop database explorer. The user pressed Summarise on a dashboard; your answer is shown on the dashboard itself, above its tiles. There is no conversation: answer once.
+
+Run the tiles' SQL with run_query — it is given with the filters' current values already in it — and read get_business_context for what the data means. To say what changed, run the same queries for the previous period of the same length (shift the dates in them); say so when there is no date to compare on. Every tool is read-only.
+
+Write in LANGUAGE, in short Markdown, with no heading for the whole answer and no preamble:
+- What stands out: 3–5 bullets, each with the figure that shows it.
+- What changed against the previous period, with the change as a number and a percentage.
+- What needs attention, if anything: a tile that failed, an outlier, a figure going the wrong way.
+Name the tile each point comes from. Do not repeat the SQL, and do not describe how you worked.`
+
+/** The summariser's instructions, in the language the user chose. */
+export function summaryPrompt(ai: AiSettings): string {
+  return SUMMARY_PROMPT_BASE.replace(
+    "LANGUAGE",
+    ai.language
+      ? `${ai.language} (the user chose it in Settings); names and values stay as they are`
+      : "English, unless the dashboard's titles are in another language — then that one"
+  )
+}
+
+/** The dashboard as the summariser is told it: its scope and each tile's SQL
+ * with the filters' current values written in. */
+export function summaryRequest(
+  dashboard: Dashboard,
+  target: Pick<Connection, "id" | "name" | "engine" | "database">,
+  cross: { column: string; value: Cell } | null
+): string {
+  const values = filterValues(dashboard.filters)
+  const scope = dashboard.filters.map(
+    (filter) => `- ${filter.label}: ${filterValueLabel(filter)}`
+  )
+  const tiles = dashboard.tiles.map((tile, index) => {
+    if (isTextTile(tile)) return `${index + 1}. Text: ${tileText(tile.text ?? "").trim()}`
+    let sql: string
+    try {
+      sql = inlineParameters(tile.sql, values, target.engine)
+    } catch (error) {
+      return `${index + 1}. ${tile.title} — cannot run with the current filters: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    }
+    const chart = tile.chart ? `${tile.chart.type} chart` : "table"
+    return `${index + 1}. ${tile.title} (${chart})\n\`\`\`sql\n${sql}\n\`\`\``
+  })
+  return [
+    `Connection: ${target.name} (id ${target.id}, ${target.engine}, database "${target.database}")`,
+    `Dashboard: "${dashboard.title}"`,
+    `Filters:\n${scope.length ? scope.join("\n") : "(none)"}`,
+    ...(cross
+      ? [
+          `The user clicked ${cross.column} = ${cross.value ?? "NULL"} on a tile, narrowing the tiles that have a "${cross.column}" column to it. Summarise with that in mind.`,
+        ]
+      : []),
+    `Tiles:\n${tiles.join("\n\n")}`,
+    "Summarise this dashboard.",
+  ].join("\n\n")
+}
+
 /**
- * The one-shot helper behind the SQL editor's Generate, Explain and Fix.
+ * The one-shot helper behind the SQL editor's Generate, Explain and Fix, and
+ * a dashboard's Summarise.
  *
  * A fresh `claude` each time, not the chat's session: the editor's question
  * stands alone, and answering it should not put words in the conversation.
@@ -108,12 +179,6 @@ export class Assist {
   }
 
   async run(input: AssistInput): Promise<AssistResult> {
-    const binary = await locateClaude()
-    if (!binary) {
-      throw new Error(
-        "Claude Code was not found on this machine. Install it and sign in with `claude`."
-      )
-    }
     const target = this.connections
       .list()
       .find((item) => item.id === input.connectionId)
@@ -122,8 +187,73 @@ export class Assist {
       throw new Error("Say what the query should return.")
     }
 
+    // What Settings › Models & language says for this task; a task left to
+    // follow the chat runs on what the chat's picker shows.
+    const ai = this.library.aiSettings()
+    const choice = ai.models[input.mode]
+    const result = await this.ask({
+      requestId: input.requestId,
+      prompt: request(
+        input,
+        `${target.name} (id ${target.id}, ${target.engine}, database "${target.database}")`
+      ),
+      systemPrompt: assistPrompt(ai),
+      model: choice.model ?? input.model,
+      effort: choice.model ? choice.effort : input.effort,
+      schema: OUTPUT_SCHEMA,
+      maxTurns: 20,
+    })
+    return readAnswer(result.structured, result.text)
+  }
+
+  /**
+   * A dashboard's Summarise: the same one-shot, read-only helper, told the
+   * dashboard's tiles with the filters' current values already in their SQL,
+   * so the answer is shown on the dashboard and the chat is left as it was.
+   */
+  async summarize(input: DashboardSummaryInput): Promise<string> {
+    const dashboard = this.library.dashboard(input.dashboardId)
+    const target = this.connections
+      .list()
+      .find((item) => item.id === dashboard.connectionId)
+    if (!target) throw new Error("That dashboard's connection no longer exists.")
+    if (!dashboard.tiles.some((tile) => !isTextTile(tile))) {
+      throw new Error("This dashboard has no queries to summarise.")
+    }
+    const ai = this.library.aiSettings()
+    const result = await this.ask({
+      requestId: input.requestId,
+      prompt: summaryRequest(dashboard, target, input.cross ?? null),
+      systemPrompt: summaryPrompt(ai),
+      model: input.model,
+      effort: input.effort,
+      schema: null,
+      maxTurns: 40,
+    })
+    const text = result.text.trim()
+    if (!text) throw new Error("The assistant ended without a summary.")
+    return text
+  }
+
+  private async ask(job: {
+    requestId: string
+    prompt: string
+    systemPrompt: string
+    model: string | null
+    effort: ChatEffort | null
+    schema: Record<string, unknown> | null
+    maxTurns: number
+  }): Promise<{ structured: unknown; text: string }> {
+    const binary = await locateClaude()
+    if (!binary) {
+      throw new Error(
+        "Claude Code was not found on this machine. Install it and sign in with `claude`."
+      )
+    }
+    const { model, effort } = job
+
     const controller = new AbortController()
-    this.running.set(input.requestId, controller)
+    this.running.set(job.requestId, controller)
     const tools = createDbTools(
       {
         connections: this.connections,
@@ -136,27 +266,17 @@ export class Assist {
       "assist"
     )
 
-    // What Settings › Models & language says for this task; a task left to
-    // follow the chat runs on what the chat's picker shows.
-    const ai = this.library.aiSettings()
-    const choice = ai.models[input.mode]
-    const model = choice.model ?? input.model
-    const effort = choice.model ? choice.effort : input.effort
-
     let stderr = ""
     try {
       const conversation = query({
-        prompt: request(
-          input,
-          `${target.name} (id ${target.id}, ${target.engine}, database "${target.database}")`
-        ),
+        prompt: job.prompt,
         options: {
           cwd: this.workspace,
           pathToClaudeCodeExecutable: binary.path,
           env: claudeEnvironment(binary),
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
-          systemPrompt: assistPrompt(ai),
+          systemPrompt: job.systemPrompt,
           tools: [],
           mcpServers: { [TOOL_SERVER]: tools },
           strictMcpConfig: true,
@@ -177,9 +297,11 @@ export class Assist {
             }
             return { behavior: "allow", updatedInput: toolInput }
           },
-          outputFormat: { type: "json_schema", schema: OUTPUT_SCHEMA },
+          ...(job.schema
+            ? { outputFormat: { type: "json_schema" as const, schema: job.schema } }
+            : {}),
           persistSession: false,
-          maxTurns: 20,
+          maxTurns: job.maxTurns,
           abortController: controller,
           stderr: (data) => {
             stderr = (stderr + data).slice(-4000)
@@ -194,7 +316,7 @@ export class Assist {
             message.subtype === "success" ? [message.result] : message.errors
           throw new Error(errors.join("\n") || "The assistant could not answer.")
         }
-        return readAnswer(message.structured_output, message.result)
+        return { structured: message.structured_output, text: message.result }
       }
       throw new Error(
         controller.signal.aborted
@@ -205,7 +327,7 @@ export class Assist {
       if (controller.signal.aborted) throw new Error("Cancelled.")
       throw error
     } finally {
-      this.running.delete(input.requestId)
+      this.running.delete(job.requestId)
     }
   }
 }
