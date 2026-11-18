@@ -1,6 +1,15 @@
 import path from "node:path"
 
-import { app, BrowserWindow, nativeTheme, Notification, safeStorage, shell } from "electron"
+import {
+  app,
+  autoUpdater,
+  BrowserWindow,
+  nativeTheme,
+  Notification,
+  powerMonitor,
+  safeStorage,
+  shell,
+} from "electron"
 
 import { describeCondition } from "../shared/alerts"
 import { IPC, type ChatEvent } from "../shared/api"
@@ -14,6 +23,7 @@ import { Gateway } from "./gateway"
 import { GoogleAccount } from "./google-account"
 import { registerIpc } from "./ipc"
 import { Library } from "./library"
+import { GatewayTray } from "./tray"
 
 // A data directory of its own for a run that must not touch the real one.
 if (process.env.VEYLENS_HOME) {
@@ -40,6 +50,37 @@ let mainWindow: BrowserWindow | null = null
 /** An update's installer, run at `will-quit` — after `before-quit` has closed
  * the chats and connections. */
 let quitTask: (() => void) | null = null
+
+/**
+ * Whether a quit is to go through. While a gateway is on, a quit — Cmd+Q, the
+ * Dock's Quit, the last window closing — only closes the window: the app
+ * stays in the menu bar so the apps going through its gateways keep their
+ * database. The tray's Quit, an update and the machine shutting down set this
+ * and quit for real.
+ */
+let quitting = false
+
+/** Set once the gateways are up. */
+let gatewaysOn = (): boolean => false
+
+/** Brings the window up, making one if there is none — the Dock icon back
+ * too, when it was hidden for the menu bar. */
+async function showWindow(): Promise<void> {
+  if (process.platform === "darwin") await app.dock?.show()
+  if (!mainWindow) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+/** Closes the windows and goes on in the menu bar alone. */
+function runInBackground(): void {
+  for (const window of BrowserWindow.getAllWindows()) window.close()
+  if (process.platform === "darwin") app.dock?.hide()
+}
 
 function broadcast(event: ChatEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -136,10 +177,8 @@ void app.whenReady().then(() => {
       subtitle: connection?.name,
       body: `${alert.state.value?.toLocaleString()} — ${describeCondition(alert.condition, alert.threshold)}`,
     })
-    notice.on("click", () => {
-      if (!mainWindow) createWindow()
-      mainWindow?.show()
-      mainWindow?.focus()
+    notice.on("click", async () => {
+      await showWindow()
       broadcast({ type: "show", target: { kind: "alerts", connectionId: alert.connectionId } })
     })
     notice.show()
@@ -164,17 +203,20 @@ void app.whenReady().then(() => {
     () => connections.reopenFiles()
   )
   useSignedInAccount(() => google.requestClient())
+  let tray: GatewayTray | null = null
   const gateway = new Gateway(path.join(dataDir, "gateway.json"), connections, (state) => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send(IPC.gatewayState, state)
     }
+    tray?.update(state)
   })
+  gatewaysOn = () => gateway.state().gateways.some((item) => item.enabled)
   gateway.watchQueries((batch) => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send(IPC.gatewayQueryBatch, batch)
     }
   })
-  registerIpc({
+  const handlers = registerIpc({
     connections,
     chats,
     library,
@@ -194,10 +236,37 @@ void app.whenReady().then(() => {
       },
       quitAndRun: (task) => {
         quitTask = task
+        quitting = true
         app.quit()
       },
     },
   })
+
+  tray = new GatewayTray({
+    connectionName: (connectionId) => gateway.connectionName(connectionId),
+    open: () => void showWindow(),
+    quit: () => {
+      quitting = true
+      app.quit()
+    },
+    setEnabled: (settings, enabled) => handlers.saveGateway({ ...settings, enabled }),
+    switchTo: (gatewayId, connectionId) => handlers.switchGateway(gatewayId, connectionId),
+  })
+  tray.update(gateway.state())
+  // macOS's update (Squirrel) and the machine shutting down quit for real.
+  autoUpdater.on("before-quit-for-update", () => {
+    quitting = true
+  })
+  powerMonitor.on("shutdown", () => {
+    quitting = true
+  })
+  // So does a signal — the dev script's Ctrl+C, a `kill`.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      quitting = true
+      app.quit()
+    })
+  }
 
   // In dev the app runs inside the stock Electron bundle, so the Dock shows
   // Electron's atom. A packaged build has the icon baked into its bundle (and
@@ -208,10 +277,17 @@ void app.whenReady().then(() => {
 
   createWindow()
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) void showWindow()
   })
 
-  app.on("before-quit", () => {
+  app.on("before-quit", (event) => {
+    if (!quitting && gatewaysOn()) {
+      event.preventDefault()
+      runInBackground()
+      return
+    }
+    quitting = true
+    tray?.destroy()
     chats.closeAll()
     alerts.stop()
     assist.cancelAll()
@@ -230,6 +306,13 @@ app.on("will-quit", () => {
   }
 })
 
+// With a gateway on, the app goes on in the menu bar (the notification area
+// off macOS) — without its Dock icon on macOS, where it would otherwise stay.
 app.on("window-all-closed", () => {
+  if (quitting) return
+  if (gatewaysOn()) {
+    if (process.platform === "darwin") app.dock?.hide()
+    return
+  }
   if (process.platform !== "darwin") app.quit()
 })

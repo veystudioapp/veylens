@@ -44,6 +44,9 @@ await Promise.all([
   esbuild.build({
     ...shared,
     entryPoints: { main: "src/main/main.ts" },
+    // The tray icons (scripts/tray-icon.mjs), carried in the bundle: a few
+    // hundred bytes each, and `resources/` is not in the packaged app.
+    loader: { ".png": "dataurl" },
     // The agent SDK is ESM and builds a `require` from `import.meta.url`,
     // which esbuild's CJS output would otherwise leave undefined.
     banner: {

@@ -54,7 +54,7 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 const statusOf = (error: unknown): AuditStatus =>
   refusal(messageOf(error)) ? "refused" : "failed"
 
-type Handlers = {
+export type Handlers = {
   [K in keyof DesktopApi as DesktopApi[K] extends (
     ...args: never[]
   ) => Promise<unknown>
@@ -66,6 +66,9 @@ type Handlers = {
  * Every call the renderer can make, in one place. Each is a thin step onto
  * `Connections` or `Chats`; an error thrown here reaches the renderer as a
  * rejected promise carrying its message.
+ *
+ * Returned too, for the main process's own menus to go through the same
+ * steps — and the same audit log — as the window does.
  */
 export function registerIpc({
   connections,
@@ -87,7 +90,7 @@ export function registerIpc({
   gateway: Gateway
   google: GoogleAccount
   updates: UpdateHost
-}): void {
+}): Handlers {
   const nameOf = (connectionId: string) =>
     connections.list().find((item) => item.id === connectionId)?.name ?? null
   const mine = (connectionId: string | null) => ({
@@ -502,4 +505,5 @@ export function registerIpc({
         (handler as (...args: unknown[]) => Promise<unknown>)(...args)
     )
   }
+  return handlers
 }
