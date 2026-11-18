@@ -2423,6 +2423,31 @@ await check("ai settings: kept, made sound, and told to the chat and the SQL hel
   assert.doesNotMatch(describeContext({ connectionId: shop.id, tab: null } as never, connections, library), /answer language/)
 })
 
+await check("chat connections: those picked in the chat are the default, each described", () => {
+  const { access: _none, ...fresh } = shop
+  const archive = connections.save(null, { ...fresh, name: "Archive" })
+  const follow = describeContext({ connectionId: shop.id, tab: null }, connections, library)
+  assert.match(follow, /^connection: Shop /m)
+  assert.doesNotMatch(follow, /chosen in the chat/)
+
+  const one = describeContext({ connectionId: shop.id, connectionIds: [archive.id], tab: null }, connections, library)
+  assert.match(one, /connection chosen in the chat: Archive /)
+  assert.match(one, /READ-ONLY/)
+  assert.match(one, /open tab is on Shop .* not one of those chosen/)
+
+  const both = describeContext(
+    { connectionId: shop.id, connectionIds: [shop.id, archive.id, "gone"], tab: null },
+    connections,
+    library
+  )
+  assert.match(both, /connections chosen in the chat \(2\)/)
+  assert.match(both, /^- Shop \(id /m)
+  assert.match(both, /^- Archive \(id /m)
+  assert.match(both, /^ {2}access: READ-ONLY/m)
+  assert.doesNotMatch(both, /open tab is on/)
+  connections.delete(archive.id)
+})
+
 await check("chat images: [Image #n] tags, kept as files, sent as image blocks", async () => {
   const ci = await import("../src/shared/chat-images")
   const { Inbox } = await import("../src/main/chats")

@@ -118,6 +118,8 @@ type State = {
   agent: AgentStatus | null
   chats: ChatSummary[]
   chat: Chat | null
+  /** What the chat works with; empty follows the open tab. */
+  chatConnectionIds: string[]
   /** A row's `value` from the CLI's list, or null to inherit its settings. */
   model: string | null
   effort: ChatEffort | null
@@ -169,6 +171,7 @@ type State = {
   deleteChat(chatId: string): Promise<void>
   send(text: string, images?: ChatImage[]): Promise<void>
   setModel(model: string | null, effort: ChatEffort | null): void
+  setChatConnections(ids: string[]): void
   /** Saved; a new default for the chat moves the chat's picker to it too. */
   setAiSettings(settings: AiSettings): Promise<void>
   setDraft(draft: string | null): void
@@ -363,6 +366,7 @@ export const useStore = create<State>((set, get) => {
     agent: null,
     chats: [],
     chat: null,
+    chatConnectionIds: [],
     // As in Vey, a chat opens on the CLI's recommended row rather than on
     // whatever somebody set for their terminal.
     model: "default",
@@ -466,6 +470,7 @@ export const useStore = create<State>((set, get) => {
         knowledge,
         dashboards,
         alerts,
+        chatConnectionIds,
       } = get()
       const remaining = tabs.filter((tab) => tab.connectionId !== id)
       const { [id]: _gone, ...restTrees } = trees
@@ -482,6 +487,7 @@ export const useStore = create<State>((set, get) => {
           : (remaining.at(-1)?.id ?? null),
         activeConnectionId:
           activeConnectionId === id ? null : activeConnectionId,
+        chatConnectionIds: chatConnectionIds.filter((item) => item !== id),
       })
     },
 
@@ -732,7 +738,7 @@ export const useStore = create<State>((set, get) => {
     },
 
     async send(text, images) {
-      const { chat, model, effort } = get()
+      const { chat, model, effort, chatConnectionIds } = get()
       if (!chat) return
       await api().sendMessage({
         chatId: chat.id,
@@ -742,12 +748,14 @@ export const useStore = create<State>((set, get) => {
         effort,
         context: {
           ...get().viewerContext(),
+          ...(chatConnectionIds.length > 0 && { connectionIds: chatConnectionIds }),
           mentions: findMentions(text, currentMentionTargets(get())),
         },
       })
     },
 
     setModel: (model, effort) => set({ model, effort }),
+    setChatConnections: (chatConnectionIds) => set({ chatConnectionIds }),
 
     async setAiSettings(settings) {
       const before = get().ai.models.chat

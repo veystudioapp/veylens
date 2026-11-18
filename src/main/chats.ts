@@ -30,6 +30,7 @@ import type {
   ChatEvent,
   ChatItem,
   ChatSummary,
+  Connection,
   AuditAction,
   AuditStatus,
   SendInput,
@@ -140,7 +141,7 @@ const PICTURE_NAME = /^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/
 
 const SYSTEM_PROMPT = `You are the data assistant inside Vey Lens, a desktop database explorer. The user asks questions about their databases in plain language; you answer by inspecting the schema and running SQL through your tools.
 
-The window has three parts: an explorer listing connections, tables and dashboards, a viewer showing the table, query or dashboard the user has open, and this chat. Each user message starts with a <viewer> block saying which connection and tab they are looking at — that is what "this table", "here" or an unqualified table name refers to. Use it as the default connection. If it names none and several connections exist, ask which one.
+The window has three parts: an explorer listing connections, tables and dashboards, a viewer showing the table, query or dashboard the user has open, and this chat. Each user message starts with a <viewer> block saying which connection and tab they are looking at — that is what "this table", "here" or an unqualified table name refers to. Use it as the default connection. If it names none and several connections exist, ask which one. When it lists connections "chosen in the chat", the user picked those in the chat's toolbar: they replace the tab's connection as the default — work with them, across all of them when there are several, and touch another connection only when the user names it.
 
 When the user writes @name — @orders, @"Sales overview" — they picked that table, view, dashboard, metric or connection from a menu. The <viewer> block lists each one under "mentioned with @" with exactly what it is: use that schema, id or connection rather than searching for the name, and leave the @ out when you answer.
 
@@ -267,25 +268,33 @@ export function describeContext(
 ): string {
   const all = connections.list()
   const active = all.find((item) => item.id === context.connectionId)
-  const lines = [
-    active
-      ? `connection: ${active.name} (id ${active.id}, ${active.engine})`
-      : `connection: none selected (${all.length} set up)`,
-  ]
-  if (active?.access === "read_only") {
+  const chosen = (context.connectionIds ?? []).flatMap(
+    (id) => all.find((item) => item.id === id) ?? []
+  )
+  const lines: string[] = []
+  if (chosen.length > 1) {
     lines.push(
-      "access: READ-ONLY in Vey Lens — no INSERT, UPDATE, DELETE or DDL. Do not propose or attempt changes; explain that the connection is read-only if one is asked for."
+      `connections chosen in the chat (${chosen.length}) — work with these; when a question could mean any of them, answer for each or compare them, and say which one each result is from:`
     )
-  }
-  if (active) {
-    const rules = describePermissions(active.permissions, active.access)
-    if (rules.length && active.access !== "read_only") {
-      lines.push(`permissions in Vey Lens (refused if broken): ${rules.join("; ")}`)
+    for (const item of chosen) {
+      lines.push(`- ${item.name} (id ${item.id}, ${item.engine})`)
+      lines.push(...describeConnection(item, library).map((line) => `  ${line}`))
     }
-    const knowledge = library.knowledge(active.id)
-    const metrics = knowledge.metrics.length
+  } else if (chosen.length === 1) {
+    const only = chosen[0]!
+    lines.push(`connection chosen in the chat: ${only.name} (id ${only.id}, ${only.engine})`)
+    lines.push(...describeConnection(only, library))
+  } else {
     lines.push(
-      `business context: ${knowledge.notes.trim() ? "notes written" : "no notes"}, ${metrics} ${metrics === 1 ? "metric" : "metrics"} defined`
+      active
+        ? `connection: ${active.name} (id ${active.id}, ${active.engine})`
+        : `connection: none selected (${all.length} set up)`
+    )
+    if (active) lines.push(...describeConnection(active, library))
+  }
+  if (chosen.length && active && !chosen.includes(active)) {
+    lines.push(
+      `the open tab is on ${active.name} (id ${active.id}, ${active.engine}), which is not one of those chosen`
     )
   }
   const ai = library.aiSettings()
@@ -336,6 +345,26 @@ export function describeContext(
     lines.push(`mentioned with @ in this message:\n${mentioned.join("\n")}`)
   }
   return `<viewer>\n${lines.join("\n")}\n</viewer>`
+}
+
+function describeConnection(connection: Connection, library: Library): string[] {
+  const lines: string[] = []
+  if (connection.access === "read_only") {
+    lines.push(
+      "access: READ-ONLY in Vey Lens — no INSERT, UPDATE, DELETE or DDL. Do not propose or attempt changes; explain that the connection is read-only if one is asked for."
+    )
+  } else {
+    const rules = describePermissions(connection.permissions, connection.access)
+    if (rules.length) {
+      lines.push(`permissions in Vey Lens (refused if broken): ${rules.join("; ")}`)
+    }
+  }
+  const knowledge = library.knowledge(connection.id)
+  const metrics = knowledge.metrics.length
+  lines.push(
+    `business context: ${knowledge.notes.trim() ? "notes written" : "no notes"}, ${metrics} ${metrics === 1 ? "metric" : "metrics"} defined`
+  )
+  return lines
 }
 
 /**

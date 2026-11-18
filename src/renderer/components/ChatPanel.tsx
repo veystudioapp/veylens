@@ -72,6 +72,7 @@ import { cn } from "@/lib/utils"
 import { Chart, ResultTable } from "./Chart"
 import { PinMenu } from "./chart-controls"
 import { ChatHistory } from "./ChatHistory"
+import { ConnectionMenu } from "./connection-menu"
 import { ImageThumb, SentImages } from "./chat-images"
 import { IconButton } from "./icon-button"
 import { ChatArt } from "./illustrations"
@@ -1111,6 +1112,7 @@ function Composer({ ref }: { ref?: Ref<ComposerHandle> }) {
             effort={effort}
             onPick={setModel}
           />
+          <ConnectionMenu />
           <IconButton
             label="Mention a table, dashboard, metric or connection (@)"
             className="size-7 text-muted-foreground"
@@ -1215,13 +1217,16 @@ export function ChatPanel({ onCollapse }: { onCollapse: () => void }) {
   const send = useStore((state) => state.send)
   const setDraft = useStore((state) => state.setDraft)
   const hasConnections = useStore((state) => state.connections.length > 0)
-  const connectionName = useStore(
-    (state) =>
-      (
-        state.connections.find((item) => item.id === state.activeConnectionId) ??
-        (state.connections.length === 1 ? state.connections[0] : undefined)
-      )?.name
-  )
+  const connectionName = useStore((state) => {
+    const picked = state.connections.filter((item) =>
+      state.chatConnectionIds.includes(item.id)
+    )
+    if (picked.length) return picked.map((item) => item.name).join(", ")
+    return (
+      state.connections.find((item) => item.id === state.activeConnectionId) ??
+      (state.connections.length === 1 ? state.connections[0] : undefined)
+    )?.name
+  })
   const scroller = useRef<HTMLDivElement>(null)
   const composer = useRef<ComposerHandle>(null)
   /** Enter and leave fire for every child crossed; the drag is over the

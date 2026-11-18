@@ -1256,6 +1256,8 @@ export type Chat = ChatSummary & { items: ChatItem[] }
 /** What the viewer is showing, sent along so "this table" means something. */
 export type ViewerContext = {
   connectionId: string | null
+  /** Connections picked in the chat's toolbar; absent when it follows the tab. */
+  connectionIds?: string[]
   tab:
     | { kind: "table"; schema: string; table: string }
     | { kind: "query"; sql: string }
