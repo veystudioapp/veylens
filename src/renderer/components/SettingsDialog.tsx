@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   PencilLine,
   Plus,
+  RefreshCw,
   RotateCcw,
   History,
   ScrollText,
@@ -885,16 +886,27 @@ function ObjectRules({
   const [error, setError] = useState<string | null>(null)
   const [schema, setSchema] = useState("")
   const [table, setTable] = useState(ALL_TABLES)
+  /** Bumped by Retry, to list the tables again after a failure. */
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
+    let stale = false
+    setTree(null)
+    setError(null)
     void window.veylens.listObjects(connection.id).then(
       (found) => {
+        if (stale) return
         setTree(found)
         setSchema((current) => current || found[0]?.name || "")
       },
-      (failure) => setError(errorMessage(failure))
+      (failure) => {
+        if (!stale) setError(errorMessage(failure))
+      }
     )
-  }, [connection.id])
+    return () => {
+      stale = true
+    }
+  }, [connection.id, attempt])
 
   const tables = tree?.find((item) => item.name === schema)?.tables ?? []
   const exists = permissions.objects.some(
@@ -984,7 +996,18 @@ function ObjectRules({
       )}
       <div className="mt-2 flex items-center gap-1.5">
         {error ? (
-          <ErrorNote className="flex-1 py-1">Could not list its tables: {error}</ErrorNote>
+          <>
+            <ErrorNote className="flex-1 py-1">Could not list its tables: {error}</ErrorNote>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 self-start"
+              onClick={() => setAttempt((count) => count + 1)}
+            >
+              <RefreshCw />
+              Retry
+            </Button>
+          </>
         ) : tree === null ? (
           <Spinner className="size-3.5 text-muted-foreground" />
         ) : (

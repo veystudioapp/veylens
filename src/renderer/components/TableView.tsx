@@ -33,6 +33,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { judgeChanges, objectAccess } from "@shared/permissions"
 
 import { errorMessage, useStore, type Tab } from "@/lib/store"
@@ -157,17 +158,28 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
   const permissions = useStore(
     (state) => state.connections.find((item) => item.id === tab.connectionId)?.permissions
   )
-  const readOnlyReason = !info
+  /** A short label for the toolbar, with the full explanation in its tooltip. */
+  const readOnlyReason: { label: string; detail: string } | null = !info
     ? null
     : access === "read_only"
-      ? "This connection is read-only in Vey Lens, so rows cannot be edited."
+      ? {
+          label: "Read-only",
+          detail: "This connection is read-only in Vey Lens, so rows cannot be edited.",
+        }
       : permissions &&
           objectAccess(permissions, { schema: tab.schema, table: tab.table }) !== "write"
-        ? "This table is read-only in the connection's permissions (Settings › Permissions)."
+        ? {
+            label: "Read-only table",
+            detail:
+              "This table is read-only in the connection's permissions (Settings › Permissions).",
+          }
       : info.kind === "view"
-      ? "A view is read-only here."
+      ? { label: "View · read-only", detail: "A view is read-only here." }
       : keyColumns.length === 0
-        ? "No primary key, so rows cannot be edited here — use a SQL tab."
+        ? {
+            label: "No primary key",
+            detail: "No primary key, so rows cannot be edited here — use a SQL tab.",
+          }
         : null
   const editable = info !== null && readOnlyReason === null
 
@@ -498,10 +510,20 @@ export function TableView({ tab, active }: { tab: TableTab; active: boolean }) {
               </>
             )}
             {readOnlyReason && (
-              <span className="ml-1 flex items-center gap-1 text-xs text-muted-foreground">
-                <Lock className="size-3" />
-                {readOnlyReason}
-              </span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className="ml-1 inline-flex cursor-default items-center gap-1 rounded-full border border-warning/50 bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning"
+                      aria-label={readOnlyReason.detail}
+                    >
+                      <Lock className="size-3" />
+                      {readOnlyReason.label}
+                    </span>
+                  }
+                />
+                <TooltipContent>{readOnlyReason.detail}</TooltipContent>
+              </Tooltip>
             )}
           </>
         )}
