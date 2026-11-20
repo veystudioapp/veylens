@@ -11,7 +11,7 @@
     "build": "bun scripts/build-electron.mjs --minify && bun node_modules/vite/bin/vite.js build",
     "package": "bun run build && electron-builder",
     "typecheck": "tsc -p tsconfig.main.json && tsc -p tsconfig.renderer.json",
-    "test": "bun test/db.ts && bun test/features.ts && bun test/gateway.ts && bun test/files.ts && bun test/google-account.ts",
+    "test": "bun test/db.ts && bun test/features.ts && bun test/gateway.ts && bun test/files.ts && bun test/google-account.ts && bun test/copy.ts",
     "demo:pg": "bun scripts/demo-db.ts"
   },
   "//dependencies": "Only what the packaged app loads from node_modules at runtime: the database drivers stay esbuild externals (dynamic requires). Everything else is bundled by esbuild (main) or Vite (renderer) and lives below.",

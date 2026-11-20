@@ -4,6 +4,7 @@ import {
   BookOpen,
   ChevronRight,
   Copy,
+  CopyPlus,
   CircleX,
   Database,
   Download,
@@ -50,6 +51,7 @@ const ACTION_LOOK: Record<AuditAction, { label: string; icon: LucideIcon; tone: 
   tools: { label: "Tools", icon: Wrench, tone: "amber" },
   gateway: { label: "Gateway", icon: Waypoints, tone: "pink" },
   alert: { label: "Alert", icon: Bell, tone: "red" },
+  copy: { label: "Copy", icon: CopyPlus, tone: "orange" },
 }
 
 /** What can be picked to narrow the list. */
@@ -65,7 +67,7 @@ type Kind = keyof typeof KINDS
 const ACTORS = { all: "Anyone", you: "You", assistant: "Assistant" }
 type Actor = keyof typeof ACTORS
 
-const CHANGES = new Set<AuditAction>(["write", "edit_rows", "plan"])
+const CHANGES = new Set<AuditAction>(["write", "edit_rows", "plan", "copy"])
 const SETTINGS = new Set<AuditAction>(["connection", "permissions", "tools", "dashboard", "context", "gateway", "alert"])
 
 function matchesKind(entry: AuditEntry, kind: Kind): boolean {

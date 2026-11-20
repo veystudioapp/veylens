@@ -27,6 +27,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
@@ -145,7 +148,19 @@ function GatewayCard({ gateway, status }: { gateway: GatewaySettings; status: Ga
   )
   const live = connections.find((connection) => connection.id === gateway.active)
   const push = (patch: Partial<GatewaySettings>) => void save({ ...gateway, ...patch })
-  const snippet = envSnippet(gateway.engine, gateway.port, gateway.password, live?.database ?? "")
+  const databases = gateway.databases ?? {}
+  const pickDatabase = (connectionId: string, database: string | null) => {
+    const next = { ...databases }
+    if (database) next[connectionId] = database
+    else delete next[connectionId]
+    push({ databases: next })
+  }
+  const snippet = envSnippet(
+    gateway.engine,
+    gateway.port,
+    gateway.password,
+    (live && databases[live.id]) || live?.database || ""
+  )
 
   const rotate = async () => {
     const ok = await confirm({
@@ -220,6 +235,8 @@ function GatewayCard({ gateway, status }: { gateway: GatewaySettings; status: Ga
             connection={connection}
             live={connection.id === gateway.active}
             busy={switching?.gatewayId === gateway.id && switching.connectionId === connection.id}
+            database={databases[connection.id] ?? null}
+            onPickDatabase={(database) => pickDatabase(connection.id, database)}
             onPick={() => void pick(connection)}
             onRemove={() => push({ connections: gateway.connections.filter((id) => id !== connection.id) })}
           />
@@ -293,17 +310,111 @@ function GatewayCard({ gateway, status }: { gateway: GatewaySettings; status: Ga
   )
 }
 
+/**
+ * Which database of a connection's server the app lands in: the
+ * connection's own, or another picked here. The server's list is read when
+ * the menu opens.
+ */
+function DatabasePicker({
+  connection,
+  database,
+  onPick,
+}: {
+  connection: Connection
+  /** Picked here; null for the connection's own. */
+  database: string | null
+  onPick: (database: string | null) => void
+}) {
+  const [names, setNames] = useState<string[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = () => {
+    setError(null)
+    window.veylens.listDatabases(connection.id).then(
+      (list) => setNames(list),
+      (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure))
+    )
+  }
+
+  const own = connection.database
+  // One picked earlier that the server no longer lists stays visible.
+  const others = [...new Set([...(names ?? []), ...(database ? [database] : [])])]
+    .filter((name) => name !== own)
+    .sort()
+
+  return (
+    // The row behind it picks the connection: a click or key in here must not.
+    <span
+      className="min-w-0"
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
+      <DropdownMenu onOpenChange={(open) => open && load()}>
+        <DropdownMenuTrigger
+          render={
+            <button
+              type="button"
+              title="The database the app lands in"
+              className={cn(
+                "flex max-w-56 min-w-0 items-center gap-0.5 rounded px-1 text-[11px] hover:bg-muted hover:text-foreground",
+                database ? "font-medium text-foreground" : "text-muted-foreground"
+              )}
+            >
+              <span className="truncate">{database || own || "database from .env"}</span>
+              <ChevronDown className="size-3 shrink-0" />
+            </button>
+          }
+        />
+        <DropdownMenuContent align="start" className="max-h-72 w-auto min-w-56">
+          <DropdownMenuRadioGroup
+            value={database ?? ""}
+            onValueChange={(value: string) => onPick(value || null)}
+          >
+            <DropdownMenuRadioItem value="">
+              <span className="flex-1">{own || "The app's own"}</span>
+              <span className="text-[11px] text-muted-foreground">
+                {own ? "connection's" : "from .env"}
+              </span>
+            </DropdownMenuRadioItem>
+            {others.length > 0 && <DropdownMenuSeparator />}
+            {others.map((name) => (
+              <DropdownMenuRadioItem key={name} value={name}>
+                {name}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+          {names === null && !error && (
+            <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] text-muted-foreground">
+              <Spinner className="size-3" />
+              Reading the server's databases…
+            </div>
+          )}
+          {error && (
+            <div className="max-w-72 px-1.5 py-1 text-[11px] leading-snug" style={{ color: toneColor("red") }}>
+              {error}
+            </div>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </span>
+  )
+}
+
 /** One of a gateway's connections: click to make it the one the app goes to. */
 function ConnectionRow({
   connection,
   live,
   busy,
+  database,
+  onPickDatabase,
   onPick,
   onRemove,
 }: {
   connection: Connection
   live: boolean
   busy: boolean
+  database: string | null
+  onPickDatabase: (database: string | null) => void
   onPick: () => void
   onRemove: () => void
 }) {
@@ -341,9 +452,7 @@ function ConnectionRow({
         style={{ background: toneColor(connectionTone(connection)) }}
       />
       <span className={cn("min-w-0 truncate", live && "font-medium")}>{connection.name}</span>
-      <span className="min-w-0 truncate text-[11px] text-muted-foreground">
-        {connection.database || "no database set"}
-      </span>
+      <DatabasePicker connection={connection} database={database} onPick={onPickDatabase} />
       <span className="flex-1" />
       {live && (
         <span
@@ -468,7 +577,8 @@ export function GatewayPage() {
 
         <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
           Each gateway has its own password; any user name works. The app lands
-          in the picked connection's own database. Use <code>127.0.0.1</code>{" "}
+          in the connection's own database, or in the one picked beside it
+          (another on the same server). Use <code>127.0.0.1</code>{" "}
           and SSL off in the app. Vey Lens's permissions do not apply through
           a gateway: the app signs in as the connection's database user.
         </p>

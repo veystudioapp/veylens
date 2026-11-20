@@ -1,5 +1,6 @@
 import { Duplex } from "node:stream"
 
+import type { PGlite } from "@electric-sql/pglite"
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket"
 
 import { createSampleDb } from "../scripts/sample-db"
@@ -60,7 +61,11 @@ export class Wire extends Duplex {
 }
 
 export async function openSamplePostgres() {
-  const db = await createSampleDb()
+  return servePostgres(await createSampleDb())
+}
+
+/** Any PGlite, served the same way. */
+export function servePostgres(db: PGlite) {
   const server = new PGLiteSocketServer({ db, maxConnections: 16 })
   const accept = server as unknown as {
     active: boolean

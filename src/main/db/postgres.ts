@@ -42,6 +42,8 @@ import {
   type Driver,
   type PlanLimits,
   type QueryOptions,
+  type RawSession,
+  type RawValue,
   type ViewSource,
 } from "./types"
 
@@ -232,6 +234,17 @@ export class PostgresDriver implements Driver {
     const result = await this.run(this.pool, "SELECT version()")
     const version = result.rows[0]?.[0] ?? "PostgreSQL"
     return /^\S+ [\d.]+/.exec(version)?.[0] ?? version
+  }
+
+  async databases(): Promise<string[]> {
+    const result = await this.run(
+      this.pool,
+      `SELECT datname FROM pg_database
+        WHERE datallowconn AND NOT datistemplate
+          AND has_database_privilege(datname, 'CONNECT')
+        ORDER BY datname`
+    )
+    return result.rows.map((row) => row[0]).filter((name): name is string => Boolean(name))
   }
 
   async tree(): Promise<TreeSchema[]> {
@@ -851,6 +864,39 @@ export class PostgresDriver implements Driver {
       throw error
     } finally {
       client.release(broken)
+    }
+  }
+
+  /** Values as the server prints them, which it reads back the same. The
+   * client is closed after, not handed back: nothing it was set to lingers. */
+  async rawSession<T>(work: (session: RawSession) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect()
+    try {
+      return await work({
+        query: async (text, values = []) => {
+          const result = await client.query({ text, values, rowMode: "array", types: RAW })
+          // Several statements at once answer with one result each.
+          const last = Array.isArray(result) ? (result.at(-1) as pg.QueryArrayResult) : result
+          return { rows: (last?.rows ?? []) as RawValue[][], affected: last?.rowCount ?? 0 }
+        },
+        stream: async (text, batchSize, onBatch) => {
+          const cursor = client.query(new Cursor<RawValue[]>(text, [], { rowMode: "array", types: RAW }))
+          try {
+            for (;;) {
+              const rows = await cursor.read(batchSize)
+              if (rows.length) await onBatch(rows)
+              if (rows.length < batchSize) break
+            }
+          } finally {
+            await cursor.close().catch(() => {})
+          }
+        },
+      })
+    } finally {
+      // Before it goes: a server ends what it left open when it hangs up,
+      // but one that hands the session on (PGlite) would not.
+      await client.query("ROLLBACK").catch(() => {})
+      client.release(true)
     }
   }
 

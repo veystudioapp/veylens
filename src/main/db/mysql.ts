@@ -45,6 +45,8 @@ import {
   type Driver,
   type PlanLimits,
   type QueryOptions,
+  type RawSession,
+  type RawValue,
   type ViewSource,
 } from "./types"
 
@@ -371,6 +373,17 @@ export class MysqlDriver implements Driver {
     const result = await this.run(this.pool, "SELECT VERSION()")
     const version = result.rows[0]?.[0] ?? ""
     return /mariadb/i.test(version) ? `MariaDB ${version}` : `MySQL ${version}`
+  }
+
+  async databases(): Promise<string[]> {
+    const result = await this.run(
+      this.pool,
+      `SELECT schema_name FROM information_schema.schemata
+        WHERE schema_name NOT IN
+              ('information_schema', 'mysql', 'performance_schema', 'sys')
+        ORDER BY schema_name`
+    )
+    return result.rows.map((row) => row[0]).filter((name): name is string => Boolean(name))
   }
 
   async tree(): Promise<TreeSchema[]> {
@@ -942,7 +955,76 @@ export class MysqlDriver implements Driver {
     }
   }
 
+  /** Text as text, and bytes — BLOB, BINARY, BIT, geometry — as `Buffer`,
+   * whole. The connection is closed after: a copy sets its session's time
+   * zone, SQL mode and key checks, none of which may reach the next user. */
+  async rawSession<T>(work: (session: RawSession) => Promise<T>): Promise<T> {
+    const connection = await this.pool.getConnection()
+    try {
+      return await work({
+        query: async (text, values = []) => {
+          const [result, fields] = await connection.query({ sql: text, values, rowsAsArray: true })
+          if (!Array.isArray(result)) {
+            return { rows: [], affected: (result as mysql.ResultSetHeader).affectedRows ?? 0 }
+          }
+          const described = (fields ?? []) as unknown as Field[]
+          return {
+            rows: (result as unknown[][]).map((row) => row.map((value, index) => stored(value, described[index]))),
+            affected: 0,
+          }
+        },
+        stream: (text, batchSize, onBatch) =>
+          new Promise<void>((resolve, reject) => {
+            const core = connection.connection as unknown as {
+              query(options: { sql: string; rowsAsArray: boolean }): EventEmitter
+              pause(): void
+              resume(): void
+            }
+            let fields: Field[] = []
+            let batch: RawValue[][] = []
+            let failed = false
+            const fail = (error: unknown) => {
+              if (failed) return
+              failed = true
+              reject(error)
+            }
+            const query = core.query({ sql: text, rowsAsArray: true })
+            query.on("fields", (next: Field[] | undefined) => {
+              fields = next ?? []
+            })
+            query.on("result", (row: unknown) => {
+              if (failed || !Array.isArray(row)) return
+              batch.push(row.map((value, index) => stored(value, fields[index])))
+              if (batch.length < batchSize) return
+              const rows = batch
+              batch = []
+              // Packets that arrive meanwhile wait in the connection's queue.
+              core.pause()
+              onBatch(rows).then(() => core.resume(), fail)
+            })
+            query.on("error", fail)
+            query.on("end", () => {
+              if (failed) return
+              const rows = batch
+              batch = []
+              ;(rows.length ? onBatch(rows) : Promise.resolve()).then(resolve, fail)
+            })
+          }),
+      })
+    } finally {
+      connection.destroy()
+    }
+  }
+
   async close(): Promise<void> {
     await this.pool.end().catch(() => {})
   }
+}
+
+/** A value for writing back: bytes kept as bytes where the column holds
+ * bytes, text otherwise. */
+function stored(value: unknown, field: Field | undefined): RawValue {
+  if (value === null || value === undefined) return null
+  if (!Buffer.isBuffer(value)) return String(value)
+  return field?.characterSet === BINARY_CHARSET ? value : value.toString("utf8")
 }

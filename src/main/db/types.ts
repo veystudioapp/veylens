@@ -53,6 +53,21 @@ export type PlanLimits = { maxAffected?: number; timeoutMs?: number }
 
 export type ViewSource = { view: TableRef; source: TableRef }
 
+/** A value as it is stored: text, or bytes where the engine keeps bytes. */
+export type RawValue = string | Buffer | null
+
+/**
+ * One connection held for a long job — copying tables — and given back
+ * after. Values come as they are stored, nothing cut or spelled for reading,
+ * so they can be written back as they were.
+ */
+export type RawSession = {
+  query(text: string, values?: unknown[]): Promise<{ rows: RawValue[][]; affected: number }>
+  /** A read's rows a batch at a time; the next batch is not read until
+   * `onBatch` is done with this one. */
+  stream(text: string, batchSize: number, onBatch: (rows: RawValue[][]) => Promise<void>): Promise<void>
+}
+
 export interface Driver {
   /** The server's version line — also the connection test. */
   ping(): Promise<string>
@@ -78,6 +93,13 @@ export interface Driver {
   /** A schema's tables, their columns and the foreign keys between them —
    * for an engine that has foreign keys. */
   diagram?(schema: string): Promise<SchemaDiagram>
+  /** The databases on the server the user may sign in to, system ones left
+   * out — for a server engine. */
+  databases?(): Promise<string[]>
+  /** `work` on a connection of its own, for a server engine. Whatever it
+   * left open is rolled back, and the connection is not reused with session
+   * settings it changed. */
+  rawSession?<T>(work: (session: RawSession) => Promise<T>): Promise<T>
   close(): Promise<void>
 }
 

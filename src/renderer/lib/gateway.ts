@@ -92,8 +92,8 @@ export function envSnippet(
   const scheme = engine === "mysql" ? "mysql" : "postgresql"
   const db = database || "app"
   return [
-    `# The gateway signs in to the picked connection's own database; the`,
-    `# name below is used only when that connection names none.`,
+    `# The gateway signs in to the database picked for the connection in`,
+    `# Vey Lens; the name below is used only when none is picked or set.`,
     `DATABASE_URL=${scheme}://gateway:${encodeURIComponent(password)}@127.0.0.1:${port}/${db}`,
     `DB_HOST=127.0.0.1`,
     `DB_PORT=${port}`,

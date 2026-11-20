@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron"
 import {
   IPC,
   type ChatEvent,
+  type CopyProgress,
   type DesktopApi,
   type GatewayQueryBatch,
   type GatewayState,
@@ -28,6 +29,7 @@ const api: DesktopApi = {
 
   getTree: (connectionId) => ipcRenderer.invoke(IPC.getTree, connectionId),
   listObjects: (connectionId) => ipcRenderer.invoke(IPC.listObjects, connectionId),
+  listDatabases: (connectionId) => ipcRenderer.invoke(IPC.listDatabases, connectionId),
   setPermissions: (connectionId, permissions) =>
     ipcRenderer.invoke(IPC.setPermissions, connectionId, permissions),
   getTable: (connectionId, ref) =>
@@ -44,6 +46,16 @@ const api: DesktopApi = {
     ipcRenderer.invoke(IPC.explainQuery, connectionId, sql),
   getSchemaDiagram: (connectionId, schema) =>
     ipcRenderer.invoke(IPC.getSchemaDiagram, connectionId, schema),
+  planCopy: (input) => ipcRenderer.invoke(IPC.planCopy, input),
+  runCopy: (copyId, input) => ipcRenderer.invoke(IPC.runCopy, copyId, input),
+  cancelCopy: (copyId) => ipcRenderer.invoke(IPC.cancelCopy, copyId),
+  onCopyProgress: (listener) => {
+    const handler = (_event: IpcRendererEvent, payload: CopyProgress) => listener(payload)
+    ipcRenderer.on(IPC.copyProgress, handler)
+    return () => {
+      ipcRenderer.off(IPC.copyProgress, handler)
+    }
+  },
 
   listAlerts: () => ipcRenderer.invoke(IPC.listAlerts),
   saveAlert: (input) => ipcRenderer.invoke(IPC.saveAlert, input),

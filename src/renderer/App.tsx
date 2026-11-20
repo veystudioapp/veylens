@@ -13,6 +13,7 @@ import { useUpdateWatch } from "@/lib/updates"
 
 import { ChatPanel } from "./components/ChatPanel"
 import { ConfirmHost } from "./components/confirm"
+import { CopyHost } from "./components/CopyDialog"
 import { PromptHost } from "./components/prompt"
 import { ConnectionDialog } from "./components/ConnectionDialog"
 import { Explorer } from "./components/Explorer"
@@ -107,6 +108,7 @@ export function App() {
             onClose={() => openSettings(null)}
           />
         )}
+        <CopyHost />
         <ConfirmHost />
         <PromptHost />
       </div>

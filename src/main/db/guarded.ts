@@ -2,6 +2,7 @@ import type {
   AccessMode,
   ChangeSet,
   Engine,
+  ObjectAccess,
   Permissions,
   QueryResult,
   RowsRequest,
@@ -20,7 +21,7 @@ import {
   visibleTree,
   type Context,
 } from "../../shared/permissions"
-import type { Driver, PlanLimits, QueryOptions, ViewSource } from "./types"
+import type { Driver, PlanLimits, QueryOptions, RawSession, ViewSource } from "./types"
 
 /** What a guard reads, fresh on every call: permissions change while a
  * driver stays open. */
@@ -158,6 +159,12 @@ export class GuardedDriver implements Driver {
     return this.inner.tree()
   }
 
+  /** The server's databases, for the gateway: which signs in as the
+   * connection's user, past these permissions, so none are hidden here. */
+  async databases(): Promise<string[]> {
+    return (await this.inner.databases?.()) ?? []
+  }
+
   async table(ref: TableRef) {
     await this.see(ref)
     return this.inner.table(ref)
@@ -256,6 +263,23 @@ export class GuardedDriver implements Driver {
     } finally {
       this.views.forget()
     }
+  }
+
+  /** How a table may be used through this guard, views over hidden and
+   * structure-only tables counted. */
+  async accessOf(ref: TableRef): Promise<ObjectAccess> {
+    const { permissions } = await this.context(true)
+    return objectAccess(permissions, ref)
+  }
+
+  /**
+   * The driver's own session, with nothing in front of it: for copying
+   * tables, which judges what it reads and writes itself before it starts
+   * (src/main/copy.ts). Nothing else is to use it.
+   */
+  unguardedSession<T>(work: (session: RawSession) => Promise<T>): Promise<T> {
+    if (!this.inner.rawSession) throw new Error("Tables cannot be copied to or from this kind of connection.")
+    return this.inner.rawSession(work)
   }
 
   close(): Promise<void> {

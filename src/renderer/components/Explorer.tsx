@@ -3,7 +3,9 @@ import {
   BookOpen,
   ChevronDown,
   ChevronRight,
+  ClipboardPaste,
   Copy,
+  CopyPlus,
   Database,
   Ellipsis,
   Eye,
@@ -50,6 +52,7 @@ import { connectionTone, KIND_TONE, toneStyle } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 
 import { confirm } from "./confirm"
+import { copyTables, openPaste, pasteable, pasteLabel, useCopy } from "./CopyDialog"
 import { IconButton } from "./icon-button"
 import { promptText } from "./prompt"
 import { GatewayBar } from "./gateway-switch"
@@ -206,6 +209,19 @@ function ConnectionNode({
   const activeTab = useStore((state) =>
     state.tabs.find((tab) => tab.id === state.activeTabId)
   )
+  const copied = useCopy((state) => state.copied)
+  /** What a paste here would be, when something that can be is waiting. */
+  const pasteEntry = (schema: string | null): MenuEntry[] =>
+    pasteable(copied, connection.engine)
+      ? [
+          {
+            label: pasteLabel(copied),
+            icon: <ClipboardPaste />,
+            onSelect: () => openPaste({ connectionId: connection.id, schema }),
+          },
+        ]
+      : []
+  const copyable = connection.engine !== "duckdb"
 
   const key = `c:${connection.id}`
   const open = !!expanded[key]
@@ -383,6 +399,7 @@ function ConnectionNode({
             icon: <Bell />,
             onSelect: () => openAlerts(connection.id),
           },
+          ...(pasteable(copied, connection.engine) ? ["separator" as const, ...pasteEntry(null)] : []),
           "separator",
           ...connectionEntries,
         ]}
@@ -569,6 +586,23 @@ function ConnectionNode({
                       onSelect: () => void loadTree(connection.id),
                     },
                     "separator",
+                    ...(copyable
+                      ? [
+                          {
+                            label: connection.engine === "mysql" ? "Copy database" : "Copy schema",
+                            icon: <CopyPlus />,
+                            onSelect: () =>
+                              copyTables({
+                                connectionId: connection.id,
+                                engine: connection.engine,
+                                schema: schema.name,
+                                tables: schema.tables,
+                                whole: true,
+                              }),
+                          },
+                        ]
+                      : []),
+                    ...pasteEntry(schema.name),
                     {
                       label: "Copy name",
                       icon: <Copy />,
@@ -605,6 +639,22 @@ function ConnectionNode({
                             }),
                         },
                         "separator",
+                        ...(copyable
+                          ? [
+                              {
+                                label: table.kind === "view" ? "Copy view" : "Copy table",
+                                icon: <CopyPlus />,
+                                onSelect: () =>
+                                  copyTables({
+                                    connectionId: connection.id,
+                                    engine: connection.engine,
+                                    schema: schema.name,
+                                    tables: [table],
+                                    whole: false,
+                                  }),
+                              },
+                            ]
+                          : []),
                         {
                           label: "Copy name",
                           icon: <Copy />,

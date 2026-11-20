@@ -48,6 +48,9 @@ type Session = {
   gatewayId: string
   /** Null until it has signed in to the gateway. */
   connectionId: string | null
+  /** The database picked for it in the gateway when it signed in; null for
+   * the connection's own. */
+  database: string | null
   target: Target | null
   app: net.Socket
   servers: Duplex[]
@@ -85,6 +88,12 @@ export function checkGatewaySettings(
     }
     connections.push(id)
   }
+  // Only for connections it holds, and only a name: none is the connection's own.
+  const databases: Record<string, string> = {}
+  for (const [id, database] of Object.entries(input.databases ?? {})) {
+    const name = typeof database === "string" ? database.trim() : ""
+    if (name && connections.includes(id)) databases[id] = name
+  }
   return {
     id: input.id || randomUUID(),
     password: typeof input.password === "string" && input.password ? input.password : newPassword(),
@@ -94,6 +103,7 @@ export function checkGatewaySettings(
     enabled: input.enabled === true,
     connections,
     active: input.active && connections.includes(input.active) ? input.active : (connections[0] ?? null),
+    databases,
   }
 }
 
@@ -340,7 +350,8 @@ export class Gateway {
   describe(gatewayId: string): string {
     const gateway = this.gateways.find((item) => item.id === gatewayId)
     if (!gateway) return ""
-    return `${gateway.name} (:${gateway.port}) → ${this.nameOf(gateway.active) ?? "nothing"}`
+    const database = gateway.active ? gateway.databases?.[gateway.active] : undefined
+    return `${gateway.name} (:${gateway.port}) → ${this.nameOf(gateway.active) ?? "nothing"}${database ? ` / ${database}` : ""}`
   }
 
   /** The name of a saved connection, for the audit log. */
@@ -348,13 +359,20 @@ export class Gateway {
     return this.nameOf(connectionId) ?? "nothing"
   }
 
-  /** Closes the sessions whose gateway is gone or now goes elsewhere. A port
-   * moved is `reconcile`'s. */
+  /** Closes the sessions whose gateway is gone or now goes elsewhere — to
+   * another connection, or another database of it. A port moved is
+   * `reconcile`'s. */
   private dropMoved(): void {
     for (const session of this.sessions) {
       if (!session.connectionId) continue
       const gateway = this.gateways.find((item) => item.id === session.gatewayId)
-      if (!gateway || gateway.active !== session.connectionId) this.end(session)
+      if (
+        !gateway ||
+        gateway.active !== session.connectionId ||
+        (gateway.databases?.[session.connectionId] ?? null) !== session.database
+      ) {
+        this.end(session)
+      }
     }
     this.dropConnectors()
   }
@@ -423,6 +441,7 @@ export class Gateway {
       number: ++this.sessionCount,
       gatewayId,
       connectionId: null,
+      database: null,
       target: null,
       app,
       servers: [],
@@ -441,6 +460,7 @@ export class Gateway {
       target: () => {
         const target = this.target(gatewayId)
         session.connectionId = target.connectionId
+        session.database = target.picked
         session.target = target
         return target
       },
@@ -459,7 +479,9 @@ export class Gateway {
     void (engine === "mysql" ? serveMysql(app, gate) : servePostgres(app, gate))
   }
 
-  private target(gatewayId: string): Target & { connectionId: string } {
+  /** Where an app connection goes: the active connection, in the database
+   * picked for it here if one is (`picked`), else in its own. */
+  private target(gatewayId: string): Target & { connectionId: string; picked: string | null } {
     const gateway = this.gateways.find((item) => item.id === gatewayId)
     if (!gateway) throw new Error("This gateway has been removed in Vey Lens.")
     const connectionId = gateway.active
@@ -469,12 +491,15 @@ export class Gateway {
       )
     }
     const connection = this.connections.get(connectionId)
-    const config = this.connections.serverConfig(connectionId)
+    const picked = gateway.databases?.[connectionId] || null
+    const saved = this.connections.serverConfig(connectionId)
+    const config = picked ? { ...saved, database: picked } : saved
     if (config.engine !== gateway.engine) {
       throw new Error(`"${connection.name}" is not a ${ENGINE_NAME[gateway.engine]} connection.`)
     }
     return {
       connectionId,
+      picked,
       name: connection.name,
       config,
       secure: Boolean(config.cloudSql),

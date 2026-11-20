@@ -220,6 +220,9 @@ export type GatewaySettings = {
   connections: string[]
   /** The one it goes to now; null while it holds none. */
   active: string | null
+  /** Per connection in it: the database the app lands in, in place of the
+   * connection's own. A connection not here lands in its own. */
+  databases?: Record<string, string>
   /** What apps sign in to this gateway with, whatever user they name. It
    * goes in their `.env`, so it is shown. Empty asks for a new one. */
   password: string
@@ -1314,6 +1317,7 @@ export const AUDIT_ACTIONS = [
   "tools",
   "gateway",
   "alert",
+  "copy",
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
@@ -1395,6 +1399,9 @@ export type DesktopApi = {
   getTree(connectionId: string): Promise<TreeSchema[]>
   /** Every schema and table, hidden ones too: for setting permissions. */
   listObjects(connectionId: string): Promise<TreeSchema[]>
+  /** The databases on the connection's server it may sign in to, its system
+   * ones left out: for picking where a gateway sends the app. */
+  listDatabases(connectionId: string): Promise<string[]>
   setPermissions(connectionId: string, permissions: Permissions): Promise<Connection>
   getTable(connectionId: string, ref: TableRef): Promise<TableInfo>
   getTableDetails(connectionId: string, ref: TableRef): Promise<TableDetails>
@@ -1415,6 +1422,14 @@ export type DesktopApi = {
   explainQuery(connectionId: string, sql: string): Promise<QueryResult>
   /** A schema's tables and the foreign keys between them, hidden ones left out. */
   getSchemaDiagram(connectionId: string, schema: string): Promise<SchemaDiagram>
+
+  /** What copying tables to another connection would do, without doing it. */
+  planCopy(input: CopyInput): Promise<CopyPlan>
+  /** Copies them; progress comes through `onCopyProgress` under `copyId`. */
+  runCopy(copyId: string, input: CopyInput): Promise<CopyResult>
+  /** Stops a copy between batches of rows. */
+  cancelCopy(copyId: string): Promise<void>
+  onCopyProgress(listener: (event: CopyProgress) => void): () => void
 
   listAlerts(): Promise<Alert[]>
   saveAlert(input: AlertInput): Promise<Alert>
@@ -1523,6 +1538,82 @@ export type DesktopApi = {
   onCloseTab(listener: () => void): () => void
 }
 
+// ── Copying between connections ────────────────────────────────────────────
+
+/** What of each table is copied. */
+export const COPY_CONTENTS = ["structure_and_data", "structure", "data"] as const
+export type CopyContent = (typeof COPY_CONTENTS)[number]
+
+/**
+ * What happens to a table the target already has: the copy stops before
+ * anything is changed, the table is left out, it is dropped and made again,
+ * rows are added to it as it is, or it is emptied first. Which of them make
+ * sense depends on `CopyContent`; see `COPY_EXISTING_FOR`.
+ */
+export const COPY_EXISTING = ["fail", "skip", "replace", "append", "truncate"] as const
+export type CopyExisting = (typeof COPY_EXISTING)[number]
+
+export const COPY_EXISTING_FOR: Record<CopyContent, CopyExisting[]> = {
+  structure_and_data: ["fail", "skip", "replace", "append"],
+  structure: ["fail", "skip", "replace"],
+  data: ["append", "truncate"],
+}
+
+export type CopyInput = {
+  source: { connectionId: string; schema: string; tables: string[] }
+  /** A schema of the target connection; made when it is not there. On
+   * MySQL a schema is a database. */
+  target: { connectionId: string; schema: string }
+  content: CopyContent
+  existing: CopyExisting
+}
+
+/** One table or view, and what the copy will do with it. */
+export type CopyPlanItem = {
+  name: string
+  kind: "table" | "view" | "materialized view"
+  /** The target already has one by this name. */
+  exists: boolean
+  action: "create" | "replace" | "skip" | "append" | "truncate"
+  /** Its rows are copied. */
+  data: boolean
+  /** The source's estimate, when it has one. */
+  rowEstimate: number | null
+}
+
+export type CopyPlan = {
+  engine: ServerEngine
+  createsSchema: boolean
+  items: CopyPlanItem[]
+  /** The statements to run on the target, rows aside, for reading. */
+  script: string
+  /** What will not come across, or may not work, a line each. */
+  warnings: string[]
+  /** The target's permissions on it: `ask` is confirmed in the dialog, and
+   * `block` refuses it. */
+  rule: Rule
+  reasons: string[]
+}
+
+export type CopyProgress = {
+  copyId: string
+  /** What it is doing now, in a few words. */
+  step: string
+  table: string | null
+  /** Rows written to the table so far. */
+  rows: number
+  /** Of the tables whose rows are copied: how many are done, out of how many. */
+  done: number
+  total: number
+}
+
+export type CopyResult = {
+  items: { name: string; status: "copied" | "skipped" | "failed"; rows: number }[]
+  rows: number
+  ms: number
+  warnings: string[]
+}
+
 /** A standalone page of a dashboard, its size in CSS pixels. */
 export type DashboardExport = {
   html: string
@@ -1582,6 +1673,10 @@ export const IPC = {
   runQuery: "db:query",
   explainQuery: "db:explain",
   getSchemaDiagram: "db:diagram",
+  planCopy: "copy:plan",
+  runCopy: "copy:run",
+  cancelCopy: "copy:cancel",
+  copyProgress: "copy:progress",
   listAlerts: "alerts:list",
   saveAlert: "alerts:save",
   deleteAlert: "alerts:delete",
@@ -1607,6 +1702,7 @@ export const IPC = {
   getAiSettings: "ai:settings",
   setAiSettings: "ai:set-settings",
   listObjects: "db:objects",
+  listDatabases: "db:databases",
   setPermissions: "connections:permissions",
   assistSql: "assist:sql",
   cancelAssist: "assist:cancel",

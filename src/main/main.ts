@@ -21,6 +21,7 @@ import { Connections, type Secrets } from "./connections"
 import { useSignedInAccount } from "./db/files/google-sheets"
 import { Gateway } from "./gateway"
 import { GoogleAccount } from "./google-account"
+import { Copies } from "./copy"
 import { registerIpc } from "./ipc"
 import { Library } from "./library"
 import { GatewayTray } from "./tray"
@@ -216,8 +217,14 @@ void app.whenReady().then(() => {
       if (!window.isDestroyed()) window.webContents.send(IPC.gatewayQueryBatch, batch)
     }
   })
+  const copies = new Copies(connections, (event) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send(IPC.copyProgress, event)
+    }
+  })
   const handlers = registerIpc({
     connections,
+    copies,
     chats,
     library,
     alerts,

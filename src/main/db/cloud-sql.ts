@@ -13,7 +13,7 @@ import type {
 } from "../../shared/api"
 import { MysqlDriver } from "./mysql"
 import { PostgresDriver } from "./postgres"
-import type { ConnectionConfig, Driver, PlanLimits, QueryOptions } from "./types"
+import type { ConnectionConfig, Driver, PlanLimits, QueryOptions, RawSession } from "./types"
 
 export const IP_TYPE: Record<CloudSqlIpType, IpAddressTypes> = {
   public: IpAddressTypes.PUBLIC,
@@ -117,6 +117,12 @@ export class CloudSqlDriver implements Driver {
     const inner = await this.ready()
     if (!inner.diagram) throw new Error("This kind of connection has no foreign keys to draw.")
     return inner.diagram(schema)
+  }
+
+  async rawSession<T>(work: (session: RawSession) => Promise<T>): Promise<T> {
+    const inner = await this.ready()
+    if (!inner.rawSession) throw new Error("This kind of connection cannot be copied.")
+    return inner.rawSession(work)
   }
 
   async close(): Promise<void> {

@@ -22,6 +22,7 @@ import { describeChanges, refusal, type AuditLog } from "./audit"
 import { exportDashboard } from "./dashboard-export"
 import type { Chats } from "./chats"
 import type { Connections } from "./connections"
+import type { Copies } from "./copy"
 import type { Gateway } from "./gateway"
 import type { GoogleAccount } from "./google-account"
 import type { Library } from "./library"
@@ -72,6 +73,7 @@ export type Handlers = {
  */
 export function registerIpc({
   connections,
+  copies,
   chats,
   library,
   alerts,
@@ -82,6 +84,7 @@ export function registerIpc({
   updates,
 }: {
   connections: Connections
+  copies: Copies
   chats: Chats
   library: Library
   alerts: Alerts
@@ -232,6 +235,7 @@ export function registerIpc({
 
     getTree: (connectionId) => connections.driver(connectionId).tree(),
     listObjects: (connectionId) => connections.driver(connectionId).allObjects(),
+    listDatabases: (connectionId) => connections.driver(connectionId).databases(),
     setPermissions: async (connectionId, permissions) => {
       const saved = connections.setPermissions(connectionId, permissions)
       audit.record({
@@ -294,6 +298,33 @@ export function registerIpc({
     },
 
     getSchemaDiagram: (connectionId, schema) => connections.driver(connectionId).diagram(schema),
+
+    planCopy: (input) => copies.plan(input),
+    runCopy: async (copyId, input) => {
+      const what = { structure_and_data: "structure and data", structure: "structure", data: "data" }[input.content]
+      const count = input.source.tables.length
+      const base = {
+        ...mine(input.target.connectionId),
+        action: "copy" as const,
+        summary: `Copied ${count} ${count === 1 ? "table" : "tables"} (${what}) from ${nameOf(input.source.connectionId) ?? input.source.connectionId} › ${input.source.schema} into ${input.target.schema}`,
+        sql: `-- ${input.source.tables.join(", ")}\n-- existing tables: ${input.existing}`,
+      }
+      try {
+        const result = await copies.run(copyId, input)
+        audit.record({
+          ...base,
+          status: "ok",
+          rows: result.rows,
+          ms: result.ms,
+          ...(result.warnings.length ? { detail: result.warnings.join("\n") } : {}),
+        })
+        return result
+      } catch (error) {
+        audit.record({ ...base, status: statusOf(error), detail: messageOf(error) })
+        throw error
+      }
+    },
+    cancelCopy: async (copyId) => copies.cancel(copyId),
 
     listAlerts: async () => alerts.list(),
     saveAlert: async (input) => {

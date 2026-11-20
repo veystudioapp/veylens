@@ -71,6 +71,14 @@ bun run package    # electron-builder → release/
 - **Charts & dashboards** — the agent draws charts in chat (bars, lines,
   KPIs, pivots…) and can pin them to dashboards with filters, drill-downs
   and scheduled refresh.
+- **Copy & paste between connections** — right-click a schema (a database
+  on MySQL) or a table › *Copy*, then *Paste…* on another connection of the
+  same engine: structure and data, structure only, or data only, and what to
+  do with tables already there (stop, skip, replace, add rows, empty first).
+  The plan and its SQL are shown first and judged by the target's
+  permissions. Keys, indexes, comments, enums and sequences come across;
+  rows are streamed in batches from one consistent snapshot. On Postgres it
+  is one transaction; MySQL commits each table as it goes.
 - **Schema diagram** — a schema's tables and the foreign keys between them,
   laid out parents-first; pan, zoom, drag tables, find one, double-click to
   open it. Keys a database never declared can be inferred from names

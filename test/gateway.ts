@@ -442,8 +442,11 @@ function harness() {
   const save = (name: string, host: string, engine: "postgres" | "mysql" = "postgres") =>
     connections.save(null, { ...base, engine, name, host })
   const dialled: string[] = []
+  /** The database each dial signed in to, in order. */
+  const dialledDatabases: string[] = []
   const gateway = new Gateway(path.join(dir, "gateway.json"), connections, () => {}, async (target) => {
     dialled.push(target.host)
+    dialledDatabases.push(target.database)
     return sample.stream()
   })
   const passwordOf = (gatewayId: string) =>
@@ -480,7 +483,7 @@ function harness() {
     })
     return state.gateways.at(-1)!
   }
-  return { dir, connections, save, dialled, gateway, app, sessions, create, passwordOf }
+  return { dir, connections, save, dialled, dialledDatabases, gateway, app, sessions, create, passwordOf }
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
@@ -522,6 +525,55 @@ await check("gateway: picking another connection closes the old sessions and the
     assert.equal(again.state().gateways.length, 1)
     assert.equal(again.state().gateways[0]!.active, dev.id)
     assert.equal(again.state().gateways[0]!.password, gateway.state().gateways[0]!.password)
+    again.close()
+    gateway.close()
+    void pool.end()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check("gateway: a database picked for a connection is where the app lands; changing it closes the sessions", async () => {
+  const { dir, connections, save, dialledDatabases, gateway, app, sessions, create } = harness()
+  try {
+    const local = save("PG local", "local-host")
+    const dev = save("PG dev", "dev-host")
+    const shop = create({ name: "Shop", connections: [local.id, dev.id] })
+    const pool = app(shop.id)
+    await pool.query("select 1")
+    // None picked: the connection's own.
+    assert.deepEqual(dialledDatabases, ["postgres"])
+
+    gateway.save({ ...gateway.state().gateways[0]!, databases: { [local.id]: " billing ", [dev.id]: "orders" } })
+    await settle()
+    assert.equal(sessions(shop.id), 0)
+    await pool.query("select 1")
+    assert.deepEqual(dialledDatabases, ["postgres", "billing"])
+    assert.equal(gateway.describe(shop.id), "Shop (:15432) → PG local / billing")
+
+    // Changing the pick of a connection not live leaves the sessions open.
+    gateway.save({ ...gateway.state().gateways[0]!, databases: { [local.id]: "billing" } })
+    await settle()
+    assert.equal(sessions(shop.id), 1)
+
+    // Switching goes to the other's own database once its pick is gone.
+    gateway.switchTo(shop.id, dev.id)
+    await settle()
+    await pool.query("select 1")
+    assert.deepEqual(dialledDatabases, ["postgres", "billing", "postgres"])
+
+    // Picks for connections it does not hold, or empty ones, are dropped.
+    const kept = gateway.save({
+      ...gateway.state().gateways[0]!,
+      connections: [dev.id],
+      databases: { [local.id]: "billing", [dev.id]: "", elsewhere: "x" },
+    }).gateways[0]!
+    assert.deepEqual(kept.databases, {})
+
+    // Kept across a restart.
+    gateway.save({ ...kept, databases: { [dev.id]: "orders" } })
+    const again = new Gateway(path.join(dir, "gateway.json"), connections, () => {})
+    assert.deepEqual(again.state().gateways[0]!.databases, { [dev.id]: "orders" })
     again.close()
     gateway.close()
     void pool.end()
