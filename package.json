@@ -1,7 +1,7 @@
 {
   "name": "veylens",
   "productName": "Vey Lens",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.cjs",
